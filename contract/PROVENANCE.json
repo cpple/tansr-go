@@ -1,0 +1,27 @@
+{
+  "description": "tansr-go 合同对照物(只读拷贝)。事实源在 cpple/tansr(tansr-cli)仓;本目录文件不得手改,变更只经重新拷贝并更新本登记。生成器 `go run ./internal/gen/manifest2go -check` 以 api-manifest.json 为唯一输入产出 api/operations_gen.go。",
+  "sourceRepo": "cpple/tansr",
+  "sourceCommit": "713fe4c68355249ae6500f831df8d82650590446",
+  "observed": "2026-10-01",
+  "files": {
+    "api-manifest.json": {
+      "source": "packages/server/contract/api-manifest.json",
+      "sha256": "759dfb2fd7f2fac1394f304e24355c4bb6daf97748622b4ce76650d55be6c1c5",
+      "revision": 4
+    },
+    "unified-v1.golden.json": {
+      "source": "doc/rfc/unified-v1.golden.json",
+      "sha256": "1ca7a95df7a0f3553733ac73c46c2bc1c7f35fa85ba054c7e68f37f2192c4e9c",
+      "schemaSource": "doc/rfc/unified-v1.schema.json",
+      "schemaSha256": "aa1037bea4d0d193a64e7c999b1d531efb9699aa90b409c66211841024431310"
+    },
+    "canonical-cross-vectors.json": {
+      "source": "scripts/api/fixtures/canonical-cross-vectors.json",
+      "sha256": "aba7c6daab723e058d7d8cda6c95f8d8cbb091b516b457c3994bd024ea2de619"
+    },
+    "sdk2-wire-v1.json": {
+      "source": "scripts/sdk2/fixtures/sdk2-wire-v1.json",
+      "sha256": "d911959c91182834af396e09c523a14f223a65871588561dff5faf1d0ba27930"
+    }
+  }
+}
