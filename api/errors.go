@@ -44,7 +44,7 @@ func (e *ClientError) Error() string {
 	if e.Detail == "" {
 		return "api client: " + string(e.Code)
 	}
-	return "api client: " + string(e.Code) + " 鈥?" + e.Detail
+	return "api client: " + string(e.Code) + " — " + e.Detail
 }
 
 // Unwrap exposes the cause for errors.Is / errors.As.
@@ -65,7 +65,7 @@ func wrapClientError(code ClientErrorCode, detail string, err error) *ClientErro
 }
 
 // ErrEnvelopeNotNegotiated is matched by errors.Is when Events() requested the unified envelope and
-// the server did not echo tansr-event-envelope: unified-v1 (manual 搂16.6 item 1: no silent downgrade
+// the server did not echo tansr-event-envelope: unified-v1 (manual §16.6 item 1: no silent downgrade
 // to raw frames).
 var ErrEnvelopeNotNegotiated = &ClientError{Code: CodeEnvelopeNotNegotiated}
 
@@ -94,7 +94,7 @@ const (
 var ErrContractUnavailable = errors.New("unified contract unavailable")
 
 // ContractUnavailableError reports that the unified contract could not be read from a response.
-// The client never falls back to legacy prefixes or to another parser on this error (搂16.6 item 1).
+// The client never falls back to legacy prefixes or to another parser on this error (§16.6 item 1).
 type ContractUnavailableError struct {
 	Reason      ContractUnavailableReason
 	Status      int
@@ -110,7 +110,7 @@ func (e *ContractUnavailableError) Error() string {
 // Is makes errors.Is(err, ErrContractUnavailable) true.
 func (e *ContractUnavailableError) Is(target error) bool { return target == ErrContractUnavailable }
 
-// ErrorCodes is the 19-code unified vocabulary (schema UnifiedCode; RFC-UAPI-1 搂2.2).
+// ErrorCodes is the 19-code unified vocabulary (schema UnifiedCode; RFC-UAPI-1 §2.2).
 var ErrorCodes = []string{
 	"invalid_request", "protocol_mismatch", "unauthorized", "forbidden", "not_found", "method_not_allowed",
 	"gone", "conflict", "stale_generation", "gap", "capability_unavailable", "capacity_exceeded",
@@ -124,7 +124,7 @@ var FacadeErrorCodes = []string{
 	"capacity_exceeded", "precondition_failed", "upstream_unavailable",
 }
 
-// RetryActions is the unified retryAction vocabulary (schema RetryAction; RFC-UAPI-1 搂2.3).
+// RetryActions is the unified retryAction vocabulary (schema RetryAction; RFC-UAPI-1 §2.3).
 var RetryActions = []string{"none", "same-request", "query-status", "rebind", "refresh", "rediscover"}
 
 // DomainRetryActions is the union of the per-family retryAction words kept in detail.domainRetryAction.
@@ -143,7 +143,7 @@ type APIError struct {
 	TraceID string
 	// RequestID is the client idempotency key as seen by the server; nil for facade-owned errors.
 	RequestID *string
-	// Message is the server message (鈮?1024 characters).
+	// Message is the server message (≤ 1024 characters).
 	Message string
 	// Detail is the open detail object (nil when absent). Known keys: domain, family, domainCode,
 	// domainStatus, domainRetryAction, fallback, reason, header, closureId, operation, state.
