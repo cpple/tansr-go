@@ -2,8 +2,10 @@
 //
 // The reader is transport-only: it merges multi-line `data:` fields with "\n", tracks `id:` for
 // Last-Event-ID resumption, skips comment lines (`:` prefix) and reports frames as they are
-// terminated by an empty line. It attaches no meaning to frames: an SSE EOF is not a completion
-// signal and the stream position is not a cursor of any other kind (SDK manual §16.6 items 5 and 6).
+// terminated by an empty line (LF, CRLF or CR line ends). Frames without a data field are not
+// dispatched (WHATWG dispatch rule; their id: still advances LastEventID). It attaches no meaning to
+// frames: an SSE EOF is not a completion signal and the stream position is not a cursor of any other
+// kind (SDK manual §16.6 items 5 and 6).
 //
 // The unified event envelope (api.EventEnvelope) is decoded by package api on top of this reader.
 package sse
@@ -82,6 +84,11 @@ func NewReader(r io.Reader, opts Options) *Reader {
 func (r *Reader) LastEventID() string { return r.lastID }
 
 // Next returns the next dispatched frame. It returns io.EOF after the stream ended cleanly.
+//
+// As in WHATWG "dispatch the event" (and the Node client's SseParser), a frame that carried no data
+// field at all — bare id:, event: or retry: lines — is not dispatched: its id: still updates
+// LastEventID and the reader moves on to the next frame. A frame whose data field is present but empty
+// (`data:`) is dispatched with Data == "".
 func (r *Reader) Next() (*Event, error) {
 	if r.done {
 		return nil, io.EOF
@@ -100,13 +107,21 @@ func (r *Reader) Next() (*Event, error) {
 			if r.opts.StrictEOF {
 				return nil, ErrTruncated
 			}
-			return r.dispatch()
+			ev, err := r.dispatch()
+			if err != nil || ev != nil {
+				return ev, err
+			}
+			return nil, io.EOF
 		}
 		if len(line) == 0 {
 			if !r.seen {
 				continue
 			}
-			return r.dispatch()
+			ev, err := r.dispatch()
+			if err != nil || ev != nil {
+				return ev, err
+			}
+			continue
 		}
 		if line[0] == ':' {
 			continue
@@ -143,8 +158,11 @@ func (r *Reader) Next() (*Event, error) {
 	}
 }
 
+// dispatch ends the current frame. The id: buffer becomes LastEventID; a frame without a data field
+// yields (nil, nil) and is not delivered.
 func (r *Reader) dispatch() (*Event, error) {
 	ev := &Event{ID: r.id, HasID: r.hasID, Event: r.event, Data: string(r.data)}
+	hasData := r.hasData
 	if r.hasID {
 		r.lastID = r.id
 	}
@@ -152,6 +170,9 @@ func (r *Reader) dispatch() (*Event, error) {
 	if !utf8.ValidString(ev.Data) || !utf8.ValidString(ev.Event) || !utf8.ValidString(ev.ID) {
 		r.done = true
 		return nil, ErrInvalidUTF8
+	}
+	if !hasData {
+		return nil, nil
 	}
 	return ev, nil
 }

@@ -50,7 +50,9 @@ func TestMultiLineDataAndComments(t *testing.T) {
 }
 
 func TestLastEventID(t *testing.T) {
-	r := NewReader(strings.NewReader("id: a\ndata: 1\n\ndata: 2\n\nid: b\u0000c\ndata: 3\n\nid\ndata: 4\n\n"), Options{})
+	// id-only frames (id: z) are not dispatched but still move LastEventID; an id with U+0000 is ignored;
+	// a bare `id` line resets it.
+	r := NewReader(strings.NewReader("id: a\ndata: 1\n\ndata: 2\n\nid: z\n\ndata: 2z\n\nid: b\u0000c\ndata: 3\n\nid\ndata: 4\n\n"), Options{})
 	var ids []string
 	for {
 		ev, err := r.Next()
@@ -62,9 +64,29 @@ func TestLastEventID(t *testing.T) {
 		}
 		ids = append(ids, r.LastEventID()+"|"+ev.Data)
 	}
-	want := []string{"a|1", "a|2", "a|3", "|4"}
+	want := []string{"a|1", "a|2", "z|2z", "z|3", "|4"}
 	if strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Fatalf("last-event-id tracking: %v", ids)
+	}
+}
+
+// TestNoDataFramesNotDispatched: bare event: / retry: / id: frames are swallowed (WHATWG; Node SseParser
+// parity) while `data:` with an empty value is a dispatched empty frame.
+func TestNoDataFramesNotDispatched(t *testing.T) {
+	events, err := readAll(t, "event: ping\n\nretry: 3000\n\nid: 9\n\nretry: 3000\ndata: \n\nevent: x\ndata: y\n\n", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Data != "" || events[0].HasID || events[0].Event != "" || events[1].Event != "x" || events[1].Data != "y" {
+		t.Fatalf("expected the empty-data frame and the x frame only, got %+v", events)
+	}
+	r := NewReader(strings.NewReader("event: only\n\n"), Options{StrictEOF: true})
+	if _, err := r.Next(); err != io.EOF {
+		t.Fatalf("event-only stream must end cleanly without a frame, got %v", err)
+	}
+	r = NewReader(strings.NewReader("id: 7"), Options{})
+	if _, err := r.Next(); err != io.EOF || r.LastEventID() != "7" {
+		t.Fatalf("lenient EOF after an id-only frame: %v %q", err, r.LastEventID())
 	}
 }
 
@@ -93,8 +115,8 @@ func TestFrameLimitAndUTF8(t *testing.T) {
 	if _, err := readAll(t, "data: \xff\xfe\n\n", Options{}); !errors.Is(err, ErrInvalidUTF8) {
 		t.Fatalf("expected ErrInvalidUTF8, got %v", err)
 	}
-	events, err := readAll(t, "event: ping\n\n", Options{})
+	events, err := readAll(t, "event: ping\ndata\n\n", Options{})
 	if err != nil || len(events) != 1 || events[0].Event != "ping" || events[0].Data != "" {
-		t.Fatalf("event-only frame: %v %+v", err, events)
+		t.Fatalf("event frame with a bare data line: %v %+v", err, events)
 	}
 }
