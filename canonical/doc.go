@@ -19,13 +19,15 @@
 //     the byte budget is supplied by the caller and applies to the raw input (decode) or the
 //     accumulated output (encode).
 //
-// Two decode entry points share one scan:
+// Two decode entry points share one scan (RFC-UAPI-1 §4.3 names in parentheses; Go uses the package
+// qualifier instead of the Canonical suffix):
 //
-//   - [ParseStrict] accepts only input that already equals its canonical bytes; otherwise it fails with
-//     code not_canonical and the first violation (whitespace / key_order / escape) — server-side wire
-//     intake, digest recomputation, closureId verification;
-//   - [Decode] accepts any lexically valid document under the same rules (whitespace, unsorted keys,
-//     equivalent escapes) — client-side tolerant reads. `Encode(Decode(x))` yields the canonical bytes.
+//   - [ParseStrict] (= parseStrict) accepts only input that already equals its canonical bytes; otherwise
+//     it fails with code not_canonical and the first violation (whitespace / key_order / escape) —
+//     server-side wire intake, digest recomputation, closureId verification;
+//   - [Decode] (= decodeCanonical) accepts any lexically valid document under the same rules (whitespace,
+//     unsorted keys, equivalent escapes) — client-side tolerant reads. `Encode(Decode(x))` yields the
+//     canonical bytes; [Encode] is encodeCanonical and [DomainDigest] is domainDigest.
 //
 // Errors are *[Error] with a stable [Code] table shared with the JavaScript implementation, an RFC 6901
 // JSON pointer [Error.Path] and, on the decode side, the UTF-8 byte [Error.Offset] of the offending input.
