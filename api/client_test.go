@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +31,11 @@ type fakeServe struct {
 	closureFn      func(map[string]any)
 	echoEnvelope   bool
 	closureID      string
+	// revision / schemaHash are the values of the golden runtime manifest view the fake serves; they are
+	// echoed in the unified headers so that body and headers agree (the client compares them). They may
+	// lag the locked ManifestRevision: the client observes the difference and never switches on it.
+	revision   int
+	schemaHash string
 }
 
 func newFakeServe(t *testing.T) (*fakeServe, *httptest.Server) {
@@ -37,13 +43,21 @@ func newFakeServe(t *testing.T) (*fakeServe, *httptest.Server) {
 	f := &fakeServe{t: t, golden: byName, echoEnvelope: true}
 	closure := materialise(t, byName["closure-full-enabled"], byName).(map[string]any)
 	f.closureID = closure["closureId"].(string)
+	view := materialise(t, byName["manifest-runtime-view"], byName).(map[string]any)
+	revision, _ := integerOf(view["revision"])
+	f.revision = int(revision)
+	f.schemaHash = "sha256:" + view["schemaHash"].(string)
 	server := httptest.NewServer(f)
 	t.Cleanup(server.Close)
 	return f, server
 }
 
 func (f *fakeServe) body(name string) map[string]any {
-	return materialise(f.t, f.golden[name], f.golden).(map[string]any)
+	vector, ok := f.golden[name]
+	if !ok {
+		f.t.Fatalf("fake serve: golden vector %q is not in the vendored golden", name)
+	}
+	return materialise(f.t, vector, f.golden).(map[string]any)
 }
 
 func (f *fakeServe) requests() []*http.Request {
@@ -55,10 +69,10 @@ func (f *fakeServe) requests() []*http.Request {
 func (f *fakeServe) unified(w http.ResponseWriter, domain string) {
 	h := w.Header()
 	h.Set(HeaderContract, Contract)
-	h.Set(HeaderManifestRevision, "4")
+	h.Set(HeaderManifestRevision, strconv.Itoa(f.revision))
 	h.Set(HeaderDomain, domain)
 	if domain == "discovery" {
-		h.Set(HeaderSchemaHash, "sha256:"+ManifestSchemaHash)
+		h.Set(HeaderSchemaHash, f.schemaHash)
 	} else {
 		h.Set(HeaderSchemaHash, "none")
 	}
@@ -136,11 +150,16 @@ func (f *fakeServe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
 		if negotiated && f.echoEnvelope {
+			// D18 golden frames: text delta (id: 12), an output block without id: (eventId null,
+			// outputWatermark 88) and the terminal turn.completed (id: 13). A resumption after 13 replays
+			// only the first frame.
 			first, _ := json.Marshal(f.body("event-envelope-session-text-delta"))
-			last, _ := json.Marshal(f.body("event-envelope-terminal-completed"))
-			_, _ = io.WriteString(w, ": keep-alive\n\nid: 12\nevent: msg.text.delta\ndata: "+string(first)+"\n\n")
+			block, _ := json.Marshal(f.body("event-envelope-terminal-output-block"))
+			last, _ := json.Marshal(f.body("event-envelope-session-turn-completed"))
+			_, _ = io.WriteString(w, ": keep-alive\n\nretry: 3000\ndata: \n\nid: 12\nevent: msg.text.delta\ndata: "+string(first)+"\n\n")
 			if r.Header.Get("Last-Event-ID") == "" {
-				_, _ = io.WriteString(w, "id: 88\nevent: tool.completed\ndata: "+string(last)+"\n\n")
+				_, _ = io.WriteString(w, "event: output.block\ndata: "+string(block)+"\n\n")
+				_, _ = io.WriteString(w, "id: 13\nevent: turn.completed\ndata: "+string(last)+"\n\n")
 			}
 			return
 		}
@@ -209,8 +228,8 @@ func TestNewOptions(t *testing.T) {
 	if err != nil || c.BaseURL() != "http://host:8080" {
 		t.Fatalf("origin normalisation: %v %q", err, c.BaseURL())
 	}
-	if Locked().ManifestRevision != 4 {
-		t.Fatal("locked revision")
+	if Locked().ManifestRevision != 6 || Locked().SchemaHash != ManifestSchemaHash {
+		t.Fatalf("locked revision: %+v (contract/api-manifest.json revision 6 expected)", Locked())
 	}
 }
 
@@ -225,14 +244,19 @@ func TestDiscoveryFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Body.Revision != 4 || manifest.Body.Runtime == nil || manifest.Meta.Domain != "discovery" {
+	if manifest.Body.Revision != f.revision || manifest.Body.Runtime == nil || manifest.Meta.Domain != "discovery" {
 		t.Fatalf("manifest: %+v", manifest.Body.Revision)
+	}
+	// The golden runtime view (revision 4) lags the locked revision 6: an observed revision that differs
+	// from the lock is diagnostics only and never an error (manual §16.1 / Options.OnContract).
+	if manifest.Meta.ManifestRevision != f.revision {
+		t.Fatalf("observed revision %d, fake served %d", manifest.Meta.ManifestRevision, f.revision)
 	}
 	caps, err := c.Capabilities(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if caps.Body.Domains.Session.Contract != "agent-session-v1" || caps.Body.ManifestRevision != 4 {
+	if caps.Body.Domains.Session.Contract != "agent-session-v1" || caps.Body.ManifestRevision != f.revision {
 		t.Fatalf("capabilities: %+v", caps.Body)
 	}
 	closure, err := c.SessionCapabilities(ctx, "s 1")
@@ -243,7 +267,7 @@ func TestDiscoveryFlow(t *testing.T) {
 		t.Fatalf("closure: %+v", closure)
 	}
 	obs, ok := c.Observed()
-	if !ok || obs.ManifestRevision != 4 {
+	if !ok || obs.ManifestRevision != f.revision {
 		t.Fatalf("observed: %+v", obs)
 	}
 	var paths []string
@@ -330,23 +354,37 @@ func TestEventsNegotiated(t *testing.T) {
 	if first.Envelope == nil || first.Envelope.IsTerminal() || first.ID != "12" {
 		t.Fatalf("first frame: %+v", first)
 	}
+	if first.Envelope.EventID == nil || *first.Envelope.EventID != "12" {
+		t.Fatalf("eventId must be the frame's id: %+v", first.Envelope)
+	}
 	if cur, ok := first.Envelope.CursorSet.EventCursor.Text(); !ok || cur != "12" || !first.Envelope.CursorSet.OutputWatermark.IsNull() {
 		t.Fatalf("cursor set: %+v", first.Envelope.CursorSet)
 	}
+	// output block without id: → eventId null, eventCursor null, outputWatermark 88 (positions stay apart)
 	second, err := stream.Next()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !second.Envelope.IsTerminal() || *second.Envelope.TerminalStatus != TerminalCompleted {
-		t.Fatalf("second frame: %+v", second.Envelope)
+	if second.HasID || second.Envelope.EventID != nil || second.Envelope.IsTerminal() || !second.Envelope.CursorSet.EventCursor.IsNull() {
+		t.Fatalf("second frame: %+v %+v", second, second.Envelope)
 	}
-	if wm, ok := second.Envelope.CursorSet.OutputWatermark.Text(); !ok || wm != "88" || !second.Envelope.CursorSet.EventCursor.IsNull() {
-		t.Fatalf("terminal cursor set: %+v", second.Envelope.CursorSet)
+	if wm, ok := second.Envelope.CursorSet.OutputWatermark.Text(); !ok || wm != "88" {
+		t.Fatalf("output watermark: %+v", second.Envelope.CursorSet)
+	}
+	third, err := stream.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !third.Envelope.IsTerminal() || *third.Envelope.TerminalStatus != TerminalCompleted || third.ID != "13" {
+		t.Fatalf("third frame: %+v", third.Envelope)
+	}
+	if cur, ok := third.Envelope.CursorSet.EventCursor.Text(); !ok || cur != "13" || !third.Envelope.CursorSet.OutputWatermark.IsNull() {
+		t.Fatalf("terminal cursor set: %+v", third.Envelope.CursorSet)
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("expected io.EOF, got %v", err)
 	}
-	if stream.LastEventID() != "88" {
+	if stream.LastEventID() != "13" {
 		t.Fatalf("LastEventID follows id: fields only, got %q", stream.LastEventID())
 	}
 	// resumption sends Last-Event-ID and nothing else changes
@@ -362,7 +400,7 @@ func TestEventsNegotiated(t *testing.T) {
 		t.Fatalf("resumed stream: %v", err)
 	}
 	reqs := f.requests()
-	if reqs[1].Header.Get("Last-Event-ID") != "88" || reqs[1].Header.Get(HeaderEventEnvelope) != Contract || reqs[1].Header.Get("Accept") != "text/event-stream" {
+	if reqs[1].Header.Get("Last-Event-ID") != "13" || reqs[1].Header.Get(HeaderEventEnvelope) != Contract || reqs[1].Header.Get("Accept") != "text/event-stream" {
 		t.Fatalf("resume headers: %v", reqs[1].Header)
 	}
 	// server that does not echo → explicit failure, never raw frames

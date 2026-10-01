@@ -1,8 +1,8 @@
 {
   "format": "tansr-api-manifest-v1",
   "contract": "unified-v1",
-  "revision": 4,
-  "schemaHash": "d97e35a97e4e88699b988b56ce56d4420e62f3887c20348c9dc148db4dee74e3",
+  "revision": 6,
+  "schemaHash": "19cafed0f01d3fdb8b8aac695980db30dec43bbd1729824d8c5bc8644a84b4b1",
   "families": [
     {
       "id": "agent-session-v1",
@@ -32,7 +32,7 @@
           "client": "node",
           "repo": "tansr-cli",
           "lock": "source",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -40,7 +40,7 @@
           "repo": "tansr-net",
           "file": "contract/session-compatibility.json",
           "lock": "route-vectors",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -48,7 +48,7 @@
           "repo": "tansr-android",
           "file": "core/src/test/resources/contract/vendored.json",
           "lock": "MANIFEST-revision-9",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -56,7 +56,7 @@
           "repo": "tansr-ios",
           "file": "Tests/TansrCoreTests/Fixtures/contract/vendored.json",
           "lock": "MANIFEST-revision-9",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -64,7 +64,7 @@
           "repo": "tansr-harmony",
           "file": "tests/fixtures/PROVENANCE.json",
           "lock": "sourceCommit-ad43a96d",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         }
       ],
@@ -128,7 +128,7 @@
           "client": "node",
           "repo": "tansr-cli",
           "lock": "generated",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -136,32 +136,32 @@
           "repo": "tansr-net",
           "file": "src/Tansr.Sdk/Protocol/WireContract.cs",
           "lock": "969273844ca9196f19dd71b292b65a49307d63be0d20a0caf557e105ba6d8605",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "android",
           "repo": "tansr-android",
           "file": "core/src/main/kotlin/com/tansr/sdk/sdk2/Sdk2NamedSchema.kt",
-          "lock": "41597914a30e045bdd83bb7564b004f467bac5b78385f784bbc99b0fc82ad491",
-          "observed": "2026-09-30",
-          "drift": true
+          "lock": "969273844ca9196f19dd71b292b65a49307d63be0d20a0caf557e105ba6d8605",
+          "observed": "2026-10-01",
+          "drift": false
         },
         {
           "client": "ios",
           "repo": "tansr-ios",
           "file": "Sources/TansrCore/SDK2/Sdk2SchemaResource.swift",
-          "lock": "41597914a30e045bdd83bb7564b004f467bac5b78385f784bbc99b0fc82ad491",
-          "observed": "2026-09-30",
-          "drift": true
+          "lock": "969273844ca9196f19dd71b292b65a49307d63be0d20a0caf557e105ba6d8605",
+          "observed": "2026-10-01",
+          "drift": false
         },
         {
           "client": "harmony",
           "repo": "tansr-harmony",
           "file": "tansr/src/main/ets/core/sdk2/client/SchemaGenerated.ets",
-          "lock": "41597914a30e045bdd83bb7564b004f467bac5b78385f784bbc99b0fc82ad491",
-          "observed": "2026-09-30",
-          "drift": true
+          "lock": "969273844ca9196f19dd71b292b65a49307d63be0d20a0caf557e105ba6d8605",
+          "observed": "2026-10-01",
+          "drift": false
         }
       ]
     },
@@ -194,7 +194,7 @@
           "client": "node",
           "repo": "tansr-cli",
           "lock": "generated",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -202,28 +202,28 @@
           "repo": "tansr-net",
           "file": "src/Tansr.Sdk/Archive/Recovery",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "android",
           "repo": "tansr-android",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "ios",
           "repo": "tansr-ios",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "harmony",
           "repo": "tansr-harmony",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         }
       ]
@@ -251,7 +251,7 @@
           "repo": "tansr-cli",
           "file": "packages/api-client/src/sdk2/receiver-sync-client.ts",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -259,7 +259,7 @@
           "repo": "tansr-net",
           "file": "src/Tansr.Sdk/Archive/Replication/ArchiveSyncClient.cs",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -267,7 +267,7 @@
           "repo": "tansr-android",
           "file": "core/src/main/kotlin/com/tansr/sdk/sdk2/receiver/Sdk2ArchiveSyncClient.kt",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -275,7 +275,7 @@
           "repo": "tansr-ios",
           "file": "Sources/TansrCore/SDK2/Sdk2ArchiveSync.swift",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -283,7 +283,7 @@
           "repo": "tansr-harmony",
           "file": "tansr/src/main/ets/core/sdk2/client/ArchiveSync.ets",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         }
       ]
@@ -317,7 +317,7 @@
           "repo": "tansr-cli",
           "file": "packages/providers/src/twp/cache-wire.ts",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -325,28 +325,28 @@
           "repo": "tansr-net",
           "file": "src/Tansr.Sdk/Cache/CacheClient.cs",
           "lock": "hand-written-internal",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "android",
           "repo": "tansr-android",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "ios",
           "repo": "tansr-ios",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "harmony",
           "repo": "tansr-harmony",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         }
       ]
@@ -374,7 +374,7 @@
           "repo": "tansr-cli",
           "file": "packages/providers/src/twp/cache-core-wire.ts",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         }
       ]
@@ -413,7 +413,7 @@
           "client": "node",
           "repo": "tansr-cli",
           "lock": "generated",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -421,7 +421,7 @@
           "repo": "tansr-net",
           "file": "src/Tansr.Sdk/Terminal/Contract/manifest.json",
           "lock": "8cd8c7c55a84c5700373aed75d5653a0737d718bfe0546641be367bda1a11896",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -429,7 +429,7 @@
           "repo": "tansr-android",
           "file": "core/src/main/resources/terminal/terminal-services-v1.schema.json",
           "lock": "8cd8c7c55a84c5700373aed75d5653a0737d718bfe0546641be367bda1a11896",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -437,7 +437,7 @@
           "repo": "tansr-ios",
           "file": "Sources/TansrCore/Terminal/TerminalSchemaResource.swift",
           "lock": "8cd8c7c55a84c5700373aed75d5653a0737d718bfe0546641be367bda1a11896",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -445,7 +445,7 @@
           "repo": "tansr-harmony",
           "file": "tansr/src/main/ets/core/terminal/SchemaGenerated.ets",
           "lock": "8cd8c7c55a84c5700373aed75d5653a0737d718bfe0546641be367bda1a11896",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         }
       ]
@@ -480,7 +480,7 @@
           "client": "node",
           "repo": "tansr-cli",
           "lock": "generated",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -488,28 +488,28 @@
           "repo": "tansr-net",
           "file": "src/Tansr.Sdk/Terminal/TerminalObservationClient.cs",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "android",
           "repo": "tansr-android",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "ios",
           "repo": "tansr-ios",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "harmony",
           "repo": "tansr-harmony",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         }
       ]
@@ -544,7 +544,7 @@
           "client": "node",
           "repo": "tansr-cli",
           "lock": "generated",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
@@ -552,28 +552,28 @@
           "repo": "tansr-net",
           "file": "src/Tansr.Sdk/Terminal/TerminalProfileClient.cs",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "android",
           "repo": "tansr-android",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "ios",
           "repo": "tansr-ios",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "harmony",
           "repo": "tansr-harmony",
           "lock": "absent",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         }
       ]
@@ -603,14 +603,14 @@
           "client": "node",
           "repo": "tansr-cli",
           "lock": "generated",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         },
         {
           "client": "csharp",
           "repo": "tansr-net",
           "lock": "hand-written",
-          "observed": "2026-09-30",
+          "observed": "2026-10-01",
           "drift": false
         }
       ]
@@ -620,12 +620,12 @@
       "domains": [
         "discovery"
       ],
-      "status": "drafted",
+      "status": "candidate",
       "rfc": "doc/rfc/RFC-UAPI-1-统一信封与canonical单模块.md",
       "source": "doc/rfc/unified-v1.schema.json",
-      "sha256": "aa1037bea4d0d193a64e7c999b1d531efb9699aa90b409c66211841024431310",
+      "sha256": "a2449bc121b5183e50b0c2432d29042446659ec8b32b355af7f204c6cb684a8e",
       "golden": {
-        "doc/rfc/unified-v1.golden.json": "1ca7a95df7a0f3553733ac73c46c2bc1c7f35fa85ba054c7e68f37f2192c4e9c"
+        "doc/rfc/unified-v1.golden.json": "7c6baad1e7053d57249c19b4c0aeda014a812c98662ec94878e0ec0d1dda0773"
       },
       "generated": [],
       "legacyEntries": [],
@@ -634,7 +634,56 @@
         "/api/capabilities",
         "/api/sessions/:id/capabilities"
       ],
-      "clients": []
+      "clients": [
+        {
+          "client": "node",
+          "repo": "tansr-cli",
+          "file": "packages/api-client/src/api/operations-generated.ts",
+          "lock": "generated",
+          "observed": "2026-10-01",
+          "drift": false
+        },
+        {
+          "client": "go",
+          "repo": "tansr-go",
+          "file": "contract/PROVENANCE.json",
+          "lock": "manifest-sha256",
+          "observed": "2026-10-01",
+          "drift": false
+        },
+        {
+          "client": "csharp",
+          "repo": "tansr-net",
+          "file": "contract/manifest.json",
+          "lock": "manifest-sha256",
+          "observed": "2026-10-01",
+          "drift": false
+        },
+        {
+          "client": "android",
+          "repo": "tansr-android",
+          "file": "contract/api-contract.lock.json",
+          "lock": "manifest-sha256",
+          "observed": "2026-10-01",
+          "drift": false
+        },
+        {
+          "client": "ios",
+          "repo": "tansr-ios",
+          "file": "contract/api-contract.lock.json",
+          "lock": "manifest-sha256",
+          "observed": "2026-10-01",
+          "drift": false
+        },
+        {
+          "client": "harmony",
+          "repo": "tansr-harmony",
+          "file": "contract/api-contract.lock.json",
+          "lock": "manifest-sha256",
+          "observed": "2026-10-01",
+          "drift": false
+        }
+      ]
     }
   ],
   "operations": [

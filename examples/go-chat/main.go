@@ -113,7 +113,7 @@ func run(ctx context.Context, base, token, message string) error {
 		if env.Type != nil {
 			eventType = *env.Type
 		}
-		fmt.Printf("event %s domain=%s cursor=%s payload=%s\n", eventType, env.Domain, cursorText(env), truncate(string(env.PayloadOrRaw()), 120))
+		fmt.Printf("event %s domain=%s cursor=%s raw=%s\n", eventType, env.Domain, cursorText(env), truncate(string(env.Raw), 120))
 		if env.IsTerminal() {
 			fmt.Printf("terminal status: %s\n", *env.TerminalStatus)
 			return nil

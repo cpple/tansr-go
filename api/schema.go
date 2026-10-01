@@ -139,7 +139,6 @@ func runeLen(s string) int { return utf8.RuneCountInString(s) }
 // --- patterns (schema definitions) --------------------------------------------------------------
 
 var (
-	idPattern              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~-]*$`)
 	sequencePattern        = regexp.MustCompile(`^(0|[1-9][0-9]{0,18})$`)
 	digestPattern          = hex64
 	familyIDPattern        = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
@@ -154,7 +153,7 @@ var (
 	legacyPathPattern      = regexp.MustCompile(`^/v[23](/(:[A-Za-z]+|[A-Za-z0-9._~-]+|\*\*))+$`)
 	legacyOffloadPattern   = regexp.MustCompile(`^/v3/sdk2/`)
 	schemaRefPattern       = regexp.MustCompile(`^[a-z0-9-]+#[A-Za-z][A-Za-z0-9]*$`)
-	eventTypePattern       = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
+	eventTypePattern       = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`)
 	capabilityIDPattern    = regexp.MustCompile(`^[a-z]+(\.[A-Za-z0-9][A-Za-z0-9-]*)+$`)
 	capabilitySrcPattern   = regexp.MustCompile(`^[^#\s]+#[A-Za-z_][A-Za-z0-9_]*$`)
 	repoNamePattern        = regexp.MustCompile(`^tansr-[a-z]+$`)
@@ -193,7 +192,7 @@ var (
 	terminalStatuses  = []string{"accepted", "completed", "aborted", "unknown"}
 	fallbackEnum      = []string{"none", "legacy-cold"}
 	reasonEnum        = []string{"not_installed", "outside_closure"}
-	facadeHeaderEnum  = []string{"tansr-session-family", "tansr-closure-id"}
+	facadeHeaderEnum  = []string{"tansr-session-family", "tansr-closure-id", "tansr-event-envelope"}
 	httpStatusEnum    = []int64{400, 401, 403, 404, 405, 408, 409, 410, 412, 413, 422, 429, 500, 503}
 	facadeStatusEnum  = []int64{400, 401, 403, 404, 405, 412, 503}
 )
@@ -1136,7 +1135,9 @@ func (c *checker) unifiedError(v any, path string) *ValidationError {
 				return err
 			}
 		}
-		if dr, ok := detail["domainRetryAction"]; ok {
+		// domainRetryAction is DomainRetryAction | null: families without an action position (agent-session-v1)
+		// are wrapped with an explicit null (error-envelope.ts; golden unified-error-v2-session-not-found-wire).
+		if dr, ok := detail["domainRetryAction"]; ok && dr != nil {
 			if _, err := c.enum(dr, child(dpath, "domainRetryAction"), DomainRetryActions); err != nil {
 				return err
 			}
@@ -1177,13 +1178,13 @@ func (c *checker) unifiedError(v any, path string) *ValidationError {
 
 // --- EventEnvelope -----------------------------------------------------------------------------
 
-// envelopeRequiredKeys are the keys every envelope must carry on the wire (D18 seven-key form minus the
-// optional eventId); envelopeOptionalKeys are accepted for transitional forms (schema nine-key form
-// and today's six-key server form).
+// envelopeKeys are the seven keys of the wire form (schema EventEnvelope; plan D18): every key is required
+// (eventId / type / terminalStatus may be null) and nothing else is accepted — the retired seq / payload
+// positions and any identity field make the frame invalid.
 var (
-	envelopeRequiredKeys = []string{"contract", "domain", "type", "cursorSet", "terminalStatus", "raw"}
-	envelopeOptionalKeys = []string{"eventId", "seq", "payload"}
-	cursorSetKeys        = []string{"eventCursor", "archiveCoverage", "outputWatermark", "materialConsumed", "ackReceipt"}
+	envelopeKeys  = []string{"contract", "eventId", "domain", "type", "cursorSet", "terminalStatus", "raw"}
+	cursorSetKeys = []string{"eventCursor", "archiveCoverage", "outputWatermark", "materialConsumed", "ackReceipt"}
+	coverageKeys  = []string{"fromSequence", "throughSequence", "headDigest"}
 )
 
 const maxCursorChars = 512
@@ -1193,25 +1194,18 @@ func (c *checker) eventEnvelope(v any, path string) *ValidationError {
 	if err != nil {
 		return err
 	}
-	if err := c.require(m, path, envelopeRequiredKeys...); err != nil {
+	if err := c.require(m, path, envelopeKeys...); err != nil {
 		return err
 	}
-	if err := c.noExtra(m, path, append(append([]string{}, envelopeRequiredKeys...), envelopeOptionalKeys...)...); err != nil {
+	if err := c.noExtra(m, path, envelopeKeys...); err != nil {
 		return err
 	}
 	if err := c.constString(m, path, "contract", Contract); err != nil {
 		return err
 	}
-	if id, ok := m["eventId"]; ok && id != nil {
-		if _, err := c.str(id, child(path, "eventId"), idPattern, 1, 128); err != nil {
-			return err
-		}
-	}
-	if seq, ok := m["seq"]; ok && seq != nil {
-		s, ok := stringOf(seq)
-		if !ok || !isSequence(s) {
-			return c.fail(child(path, "seq"), "must be a Sequence string or null")
-		}
+	// eventId = this frame's SSE id: (schema Cursor | null); absent id: is an explicit null, never "".
+	if err := c.cursorString(m["eventId"], child(path, "eventId")); err != nil {
+		return err
 	}
 	if _, err := c.enum(m["domain"], child(path, "domain"), domainEnum); err != nil {
 		return err
@@ -1231,7 +1225,13 @@ func (c *checker) eventEnvelope(v any, path string) *ValidationError {
 		return err
 	}
 	for _, key := range cursorSetKeys {
-		if err := c.cursor(cursors[key], child(cpath, key)); err != nil {
+		kpath := child(cpath, key)
+		if key == "archiveCoverage" {
+			err = c.archiveCoverage(cursors[key], kpath)
+		} else {
+			err = c.cursorString(cursors[key], kpath)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -1240,17 +1240,16 @@ func (c *checker) eventEnvelope(v any, path string) *ValidationError {
 			return err
 		}
 	}
-	if payload, ok := m["payload"]; ok && payload != nil {
-		if _, ok := objectOf(payload); !ok {
-			return c.fail(child(path, "payload"), "must be an object or null")
-		}
+	// raw is the original event object verbatim (schema: type object); its members are never inspected.
+	if _, ok := objectOf(m["raw"]); !ok {
+		return c.fail(child(path, "raw"), "must be the original event object")
 	}
 	return nil
 }
 
-// cursor accepts null, an opaque non-empty string (≤ 512 characters, no control characters) or — as
-// today's wire emits for archiveCoverage — a cursor object of the owning domain contract.
-func (c *checker) cursor(v any, path string) *ValidationError {
+// cursorString accepts null or an opaque cursor string (schema Cursor: 1–512 characters; control
+// characters are additionally refused, as in the Node client). Objects are not cursors here.
+func (c *checker) cursorString(v any, path string) *ValidationError {
 	switch cur := v.(type) {
 	case nil:
 		return nil
@@ -1259,10 +1258,32 @@ func (c *checker) cursor(v any, path string) *ValidationError {
 			return c.fail(path, "cursor must be a non-empty string without control characters")
 		}
 		return nil
-	case map[string]any:
-		return nil
 	}
-	return c.fail(path, "cursor must be a string, a cursor object or null")
+	return c.fail(path, "cursor must be a string or null")
+}
+
+// archiveCoverage accepts null, an opaque cursor string or the Coverage object the wire carries for
+// archive.status (schema ArchiveCoverage: fromSequence / throughSequence Sequence, headDigest Digest,
+// no other members).
+func (c *checker) archiveCoverage(v any, path string) *ValidationError {
+	m, ok := objectOf(v)
+	if !ok {
+		return c.cursorString(v, path)
+	}
+	if err := c.require(m, path, coverageKeys...); err != nil {
+		return err
+	}
+	if err := c.noExtra(m, path, coverageKeys...); err != nil {
+		return err
+	}
+	for _, key := range coverageKeys[:2] {
+		s, ok := stringOf(m[key])
+		if !ok || !isSequence(s) {
+			return c.fail(child(path, key), "must be a Sequence string")
+		}
+	}
+	_, err := c.str(m["headDigest"], child(path, "headDigest"), digestPattern, 0, 0)
+	return err
 }
 
 // --- header projections ------------------------------------------------------------------------

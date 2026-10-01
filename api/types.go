@@ -348,28 +348,27 @@ const (
 	TerminalUnknown   = "unknown"
 )
 
-// EventEnvelope is the unified event envelope (RFC-UAPI-1 §1.5; plan D18 seven-key wire form
-// {contract, eventId, domain, type, cursorSet, terminalStatus, raw}). Transitional forms are
-// tolerated on decode: the schema's nine-key form (seq, payload) and today's six-key server form
-// (no eventId); absent positions read as nil.
+// EventEnvelope is the unified event envelope (RFC-UAPI-1 §1.5; plan D18): exactly the seven wire keys
+// {contract, eventId, domain, type, cursorSet, terminalStatus, raw}, in wire order. The control envelope
+// is strict — a missing key, an eighth key (including the retired seq / payload positions) or a wrong
+// type is CodeInvalidEnvelope; raw is passed through untouched.
 type EventEnvelope struct {
 	Contract string `json:"contract"`
-	// EventID is the schema Id; nil when the wire did not carry it (stream position is in
-	// CursorSet.EventCursor).
+	// EventID is this frame's SSE id: verbatim; nil when the frame carried none (never synthesised or
+	// inherited). It shares its source with CursorSet.EventCursor: the former is the frame identity, the
+	// latter the Last-Event-ID resumption position.
 	EventID *string `json:"eventId"`
-	// Seq is transitional (schema nine-key form); nil on the D18 wire.
-	Seq *string `json:"seq,omitempty"`
 	// Domain is the accepting domain (= tansr-domain).
 	Domain string `json:"domain"`
-	// Type is the event type; nil when the server could not classify the event (raw carries it).
+	// Type is the event type (SSE event: field, else raw.type / raw.eventType); nil when the server could
+	// not classify the event (treat as unknown; raw carries the original).
 	Type      *string   `json:"type"`
 	CursorSet CursorSet `json:"cursorSet"`
 	// TerminalStatus is nil for non-terminal events, else accepted | completed | aborted | unknown.
 	// accepted only means accepted; unknown must be handled like result_unknown (query, never replay).
 	TerminalStatus *string `json:"terminalStatus"`
-	// Payload is transitional (schema nine-key form); nil on the D18 wire. Use PayloadOrRaw.
-	Payload json.RawMessage `json:"payload,omitempty"`
-	// Raw is the original data: event (any JSON value, including unknown types). Never validated.
+	// Raw is the original data: event object, byte for byte (known and unknown types alike). Its members
+	// are constrained by the domain contract and are never validated here.
 	Raw json.RawMessage `json:"raw"`
 }
 
@@ -379,17 +378,9 @@ func (e *EventEnvelope) IsTerminal() bool {
 	return e.TerminalStatus != nil && *e.TerminalStatus != TerminalAccepted
 }
 
-// PayloadOrRaw returns payload when present (transitional form) and raw otherwise.
-func (e *EventEnvelope) PayloadOrRaw() json.RawMessage {
-	if len(e.Payload) > 0 && !bytes.Equal(e.Payload, []byte("null")) {
-		return e.Payload
-	}
-	return e.Raw
-}
-
 // ParseEventEnvelope validates and decodes one frame data payload. Any malformed control envelope
-// yields *ClientError with CodeInvalidEnvelope wrapping the *ValidationError; raw / payload are never
-// inspected beyond their JSON type.
+// yields *ClientError with CodeInvalidEnvelope wrapping the *ValidationError; raw is never inspected
+// beyond being a JSON object.
 func ParseEventEnvelope(data []byte) (*EventEnvelope, error) {
 	value, err := DecodeJSON(data)
 	if err != nil {
@@ -401,9 +392,6 @@ func ParseEventEnvelope(data []byte) (*EventEnvelope, error) {
 	var envelope EventEnvelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return nil, wrapClientError(CodeInvalidEnvelope, "envelope does not decode", err)
-	}
-	if envelope.Raw == nil {
-		envelope.Raw = json.RawMessage("null")
 	}
 	return &envelope, nil
 }

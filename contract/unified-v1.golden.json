@@ -1,6 +1,6 @@
 {
-  "description": "unified-v1 结构金样(UAPI-01 阶段三):Manifest / Capabilities / CapabilityClosure / FacadeError / UnifiedError / EventEnvelope / RequestHeaders / ResponseHeaders 的正向与负向向量;只断言结构与标量保真,不代表鉴权或跨请求语义。依据 RFC-UAPI-1 v1.0-rc 会签稿与方案 §0 D7(统一码 19、tansr-event-envelope 协商头、票据段 ticketId)。CapabilityClosure 正例 = closure.ts computeClosure 真实产物(测试重算比对);Manifest 正例按路径引用仓内 api-manifest.json(valueFile)。负向向量两形:内联 value,或 base(某正例 name)+ patch(RFC 6902 子集 add / replace / remove,按序施于 base 深拷贝)——后者让\"错在哪一位\"一目了然并控制体积。",
-  "schemaSha256": "aa1037bea4d0d193a64e7c999b1d531efb9699aa90b409c66211841024431310",
+  "description": "unified-v1 结构金样(UAPI-01 阶段三):Manifest / Capabilities / CapabilityClosure / FacadeError / UnifiedError / EventEnvelope / RequestHeaders / ResponseHeaders 的正向与负向向量;只断言结构与标量保真,不代表鉴权或跨请求语义。依据 RFC-UAPI-1 v1.0-rc 会签稿与方案 §0 D7(统一码 19、tansr-event-envelope 协商头、票据段 ticketId)、§0 D18(事件包络 wire 定形 7 键 { contract, eventId, domain, type, cursorSet, terminalStatus, raw };EventEnvelope 正例与服务端 event-envelope.ts 真实产物同形)。CapabilityClosure 正例 = closure.ts computeClosure 真实产物(测试重算比对);Manifest 正例按路径引用仓内 api-manifest.json(valueFile)。负向向量两形:内联 value,或 base(某正例 name)+ patch(RFC 6902 子集 add / replace / remove,按序施于 base 深拷贝)——后者让\"错在哪一位\"一目了然并控制体积。",
+  "schemaSha256": "a2449bc121b5183e50b0c2432d29042446659ec8b32b355af7f204c6cb684a8e",
   "closureSources": {
     "full": {
       "installed": {
@@ -1119,6 +1119,26 @@
       "note": "RFC §2.2 / §2.3 构造"
     },
     {
+      "name": "unified-error-v2-session-not-found-wire",
+      "definition": "UnifiedError",
+      "expect": "valid",
+      "value": {
+        "contract": "unified-v1",
+        "traceId": "76e516d4-a0a5-4906-9a70-434dd61d8b5c",
+        "requestId": null,
+        "code": "not_found",
+        "status": 404,
+        "retryAction": "none",
+        "message": "Session not found: nope",
+        "detail": {
+          "domainCode": "session_not_found",
+          "domainStatus": 404,
+          "domainRetryAction": null
+        }
+      },
+      "note": "error-envelope.ts 真实产物(GET /api/sessions/nope;U3-ALIGN 联合断言):/v2 族无动作位 → detail.domainRetryAction = null"
+    },
+    {
       "name": "unified-error-if-match-conflict",
       "definition": "UnifiedError",
       "expect": "valid",
@@ -1226,7 +1246,6 @@
       "value": {
         "contract": "unified-v1",
         "eventId": "12",
-        "seq": "12",
         "domain": "session",
         "type": "msg.text.delta",
         "cursorSet": {
@@ -1237,51 +1256,180 @@
           "ackReceipt": null
         },
         "terminalStatus": null,
-        "payload": {
+        "raw": {
           "type": "msg.text.delta",
+          "sessionId": "s-1",
+          "seq": 12,
+          "ts": 1700000000000,
+          "v": "v0",
+          "source": "kernel",
           "index": 0,
           "text": "hello"
-        },
-        "raw": null
+        }
       },
-      "note": "RFC §1.5 构造"
+      "note": "RFC §1.5 / 方案 §0 D18 七键 wire 形(event-envelope.ts 真实产物同形):会话内核帧,eventId = id: = seq,raw = 原事件对象"
     },
     {
-      "name": "event-envelope-archive-material-request",
+      "name": "event-envelope-session-turn-completed",
       "definition": "EventEnvelope",
       "expect": "valid",
       "value": {
         "contract": "unified-v1",
-        "eventId": "event-1",
-        "seq": "1",
-        "domain": "archive",
-        "type": "material.request",
+        "eventId": "13",
+        "domain": "session",
+        "type": "turn.completed",
         "cursorSet": {
-          "eventCursor": "stream-cursor-1",
-          "archiveCoverage": "9",
+          "eventCursor": "13",
+          "archiveCoverage": null,
           "outputWatermark": null,
           "materialConsumed": null,
-          "ackReceipt": "ack-1"
+          "ackReceipt": null
         },
-        "terminalStatus": "accepted",
-        "payload": {
-          "bindingId": "binding-1",
-          "materialRequestId": "material-1"
-        },
-        "raw": null
+        "terminalStatus": "completed",
+        "raw": {
+          "type": "turn.completed",
+          "reason": "completed",
+          "sessionId": "s-1",
+          "seq": 13,
+          "ts": 1700000000001,
+          "v": "v0",
+          "source": "kernel"
+        }
       },
-      "note": "RFC §1.5 构造"
+      "note": "RFC §1.5 / 方案 §0 D18 七键 wire 形(event-envelope.ts 真实产物同形):终态帧 terminalStatus = completed"
     },
     {
-      "name": "event-envelope-terminal-completed",
+      "name": "event-envelope-session-replay-gap",
       "definition": "EventEnvelope",
       "expect": "valid",
       "value": {
         "contract": "unified-v1",
-        "eventId": "out-88",
-        "seq": "88",
+        "eventId": null,
+        "domain": "session",
+        "type": "server.replay.gap",
+        "cursorSet": {
+          "eventCursor": null,
+          "archiveCoverage": null,
+          "outputWatermark": null,
+          "materialConsumed": null,
+          "ackReceipt": null
+        },
+        "terminalStatus": null,
+        "raw": {
+          "type": "server.replay.gap",
+          "sessionId": "s-1",
+          "requestedAfterSeq": 999,
+          "droppedEvents": 0,
+          "reason": "ahead_of_log"
+        }
+      },
+      "note": "RFC §1.5 / 方案 §0 D18 七键 wire 形(event-envelope.ts 真实产物同形):控制帧无 id: → eventId 与 eventCursor 皆 null,不合成、不继承"
+    },
+    {
+      "name": "event-envelope-archive-status-coverage",
+      "definition": "EventEnvelope",
+      "expect": "valid",
+      "value": {
+        "contract": "unified-v1",
+        "eventId": "e1.k1.cursor-1",
+        "domain": "archive",
+        "type": "archive.status",
+        "cursorSet": {
+          "eventCursor": "e1.k1.cursor-1",
+          "archiveCoverage": {
+            "fromSequence": "1",
+            "throughSequence": "9",
+            "headDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "outputWatermark": null,
+          "materialConsumed": null,
+          "ackReceipt": null
+        },
+        "terminalStatus": null,
+        "raw": {
+          "protocol": "sdk2-ext-v1",
+          "bindingId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "eventId": "e1.a.1",
+          "cursor": "e1.k1.cursor-1",
+          "revision": "3",
+          "eventType": "archive.status",
+          "generations": {
+            "historyEpoch": "e",
+            "deletionGeneration": "1",
+            "projectionRevision": "1"
+          },
+          "payload": {
+            "protocol": "sdk2-ext-v1",
+            "bindingId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "revision": "3",
+            "publishedThroughSequence": "9",
+            "acknowledgedCoverage": {
+              "fromSequence": "1",
+              "throughSequence": "9",
+              "headDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "releasableThroughSequence": "9",
+            "pendingBytes": 0,
+            "pendingRecords": 0,
+            "sessionPersistence": "unchanged",
+            "state": "active"
+          }
+        }
+      },
+      "note": "RFC §1.5 / 方案 §0 D18 七键 wire 形(event-envelope.ts 真实产物同形):档案域 eventId = 流游标,archiveCoverage = acknowledgedCoverage 的 Coverage 对象(ArchiveCoverage 定义)"
+    },
+    {
+      "name": "event-envelope-archive-material-consumed",
+      "definition": "EventEnvelope",
+      "expect": "valid",
+      "value": {
+        "contract": "unified-v1",
+        "eventId": "e1.k1.cursor-2",
+        "domain": "archive",
+        "type": "material.status",
+        "cursorSet": {
+          "eventCursor": "e1.k1.cursor-2",
+          "archiveCoverage": null,
+          "outputWatermark": null,
+          "materialConsumed": "material-1",
+          "ackReceipt": null
+        },
+        "terminalStatus": "completed",
+        "raw": {
+          "protocol": "sdk2-ext-v1",
+          "bindingId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "eventId": "e1.a.2",
+          "cursor": "e1.k1.cursor-2",
+          "revision": "3",
+          "eventType": "material.status",
+          "generations": {
+            "historyEpoch": "e",
+            "deletionGeneration": "1",
+            "projectionRevision": "1"
+          },
+          "payload": {
+            "protocol": "sdk2-ext-v1",
+            "bindingId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "materialRequestId": "material-1",
+            "state": "core-consumed",
+            "revision": "3",
+            "acceptedRecordIds": [
+              "r1"
+            ]
+          }
+        }
+      },
+      "note": "RFC §1.5 / 方案 §0 D18 七键 wire 形(event-envelope.ts 真实产物同形):material.status core-consumed → materialConsumed + completed(received 只表示受理)"
+    },
+    {
+      "name": "event-envelope-terminal-output-block",
+      "definition": "EventEnvelope",
+      "expect": "valid",
+      "value": {
+        "contract": "unified-v1",
+        "eventId": null,
         "domain": "terminal",
-        "type": "tool.completed",
+        "type": "output.block",
         "cursorSet": {
           "eventCursor": null,
           "archiveCoverage": null,
@@ -1289,13 +1437,26 @@
           "materialConsumed": null,
           "ackReceipt": null
         },
-        "terminalStatus": "completed",
-        "payload": {
-          "operationId": "op-1"
-        },
-        "raw": null
+        "terminalStatus": null,
+        "raw": {
+          "contract": "terminal-services-v1",
+          "type": "output.block",
+          "operation": {
+            "operationId": "op-1",
+            "requestDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          "block": {
+            "seq": "88",
+            "byteOffset": "0",
+            "channel": "stdout",
+            "encoding": "utf-8",
+            "byteLength": 3,
+            "payloadDigest": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+            "base64": "YWJj"
+          }
+        }
       },
-      "note": "RFC §1.5 构造"
+      "note": "RFC §1.5 / 方案 §0 D18 七键 wire 形(event-envelope.ts 真实产物同形):tool-output 帧无 id:,outputWatermark = block.seq;type 段含连字符的终端事件名(operation-cancelled 同律)"
     },
     {
       "name": "event-envelope-unknown-type-raw",
@@ -1303,22 +1464,34 @@
       "expect": "valid",
       "value": {
         "contract": "unified-v1",
-        "eventId": "event-2",
-        "seq": "2",
-        "domain": "archive",
-        "type": "future.unknown_event",
+        "eventId": "4",
+        "domain": "session",
+        "type": "x.future.event",
         "cursorSet": {
-          "eventCursor": "stream-cursor-2",
+          "eventCursor": "4",
           "archiveCoverage": null,
           "outputWatermark": null,
           "materialConsumed": null,
           "ackReceipt": null
         },
-        "terminalStatus": "unknown",
-        "payload": null,
-        "raw": "{\"bindingId\":\"binding-1\",\"futureField\":[1,2,3]}"
+        "terminalStatus": null,
+        "raw": {
+          "type": "x.future.event",
+          "sessionId": "s-1",
+          "seq": 4,
+          "ts": 1700000000004,
+          "v": "v0",
+          "source": "kernel",
+          "extra": {
+            "nested": [
+              1,
+              "two",
+              null
+            ]
+          }
+        }
       },
-      "note": "RFC §1.5 构造"
+      "note": "RFC §1.5 / 方案 §0 D18 七键 wire 形(event-envelope.ts 真实产物同形):未知 type 仍原样入 raw(对抗单 A12),无 payload 位"
     },
     {
       "name": "request-headers-all-unified",
@@ -2567,6 +2740,118 @@
       "note": "domainStatus 须为整数"
     },
     {
+      "name": "event-envelope-seq-present",
+      "definition": "EventEnvelope",
+      "expect": "invalid",
+      "base": "event-envelope-session-text-delta",
+      "patch": [
+        {
+          "op": "add",
+          "path": "/seq",
+          "value": "12"
+        }
+      ],
+      "note": "D18:不出 seq(位置由 cursorSet.eventCursor 表达),出现即第八键 → 拒收"
+    },
+    {
+      "name": "event-envelope-payload-present",
+      "definition": "EventEnvelope",
+      "expect": "invalid",
+      "base": "event-envelope-session-text-delta",
+      "patch": [
+        {
+          "op": "add",
+          "path": "/payload",
+          "value": {
+            "text": "hello"
+          }
+        }
+      ],
+      "note": "D18:不出 payload(raw 恒为原事件对象),出现即第八键 → 拒收"
+    },
+    {
+      "name": "event-envelope-event-id-missing",
+      "definition": "EventEnvelope",
+      "expect": "invalid",
+      "base": "event-envelope-session-text-delta",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/eventId"
+        }
+      ],
+      "note": "D18:eventId 位必须在场(无 id: 时显式 null)"
+    },
+    {
+      "name": "event-envelope-event-id-empty",
+      "definition": "EventEnvelope",
+      "expect": "invalid",
+      "base": "event-envelope-session-text-delta",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/eventId",
+          "value": ""
+        }
+      ],
+      "note": "eventId 非空(SSE id: 缺席 → null 而非空串)"
+    },
+    {
+      "name": "event-envelope-event-id-number",
+      "definition": "EventEnvelope",
+      "expect": "invalid",
+      "base": "event-envelope-session-text-delta",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/eventId",
+          "value": 12
+        }
+      ],
+      "note": "eventId 为字符串或 null,不经 IEEE754"
+    },
+    {
+      "name": "event-envelope-raw-missing",
+      "definition": "EventEnvelope",
+      "expect": "invalid",
+      "base": "event-envelope-session-text-delta",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/raw"
+        }
+      ],
+      "note": "raw 位必须在场(每帧恒为原事件对象)"
+    },
+    {
+      "name": "event-envelope-raw-string",
+      "definition": "EventEnvelope",
+      "expect": "invalid",
+      "base": "event-envelope-session-text-delta",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/raw",
+          "value": "{\"type\":\"msg.text.delta\"}"
+        }
+      ],
+      "note": "raw 为原事件对象而非其文本形(D18:payload 原文不再以字符串形入 raw)"
+    },
+    {
+      "name": "event-envelope-raw-null",
+      "definition": "EventEnvelope",
+      "expect": "invalid",
+      "base": "event-envelope-session-text-delta",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/raw",
+          "value": null
+        }
+      ],
+      "note": "raw 不可为 null(不再有\"已知 type 恒 null\"的旧形)"
+    },
+    {
       "name": "event-envelope-terminal-status-unknown-word",
       "definition": "EventEnvelope",
       "expect": "invalid",
@@ -2635,18 +2920,20 @@
       "note": "游标须为字符串或 null"
     },
     {
-      "name": "event-envelope-seq-number",
+      "name": "event-envelope-archive-coverage-partial",
       "definition": "EventEnvelope",
       "expect": "invalid",
-      "base": "event-envelope-session-text-delta",
+      "base": "event-envelope-archive-status-coverage",
       "patch": [
         {
           "op": "replace",
-          "path": "/seq",
-          "value": 12
+          "path": "/cursorSet/archiveCoverage",
+          "value": {
+            "fromSequence": "1"
+          }
         }
       ],
-      "note": "seq 为 Sequence 串,不经 IEEE754"
+      "note": "archiveCoverage 对象形须为完整 Coverage(fromSequence / throughSequence / headDigest)"
     },
     {
       "name": "event-envelope-domain-unknown",
@@ -2663,31 +2950,18 @@
       "note": "domain 词表外"
     },
     {
-      "name": "event-envelope-raw-missing",
-      "definition": "EventEnvelope",
-      "expect": "invalid",
-      "base": "event-envelope-session-text-delta",
-      "patch": [
-        {
-          "op": "remove",
-          "path": "/raw"
-        }
-      ],
-      "note": "raw 保留位必须在场"
-    },
-    {
-      "name": "event-envelope-event-id-empty",
+      "name": "event-envelope-contract-other",
       "definition": "EventEnvelope",
       "expect": "invalid",
       "base": "event-envelope-session-text-delta",
       "patch": [
         {
           "op": "replace",
-          "path": "/eventId",
-          "value": ""
+          "path": "/contract",
+          "value": "unified-v2"
         }
       ],
-      "note": "eventId 非空"
+      "note": "contract 必须为 unified-v1"
     },
     {
       "name": "event-envelope-type-case",
@@ -2715,21 +2989,7 @@
           "value": "s-1"
         }
       ],
-      "note": "包络不含 sessionId(控制信封严格)"
-    },
-    {
-      "name": "event-envelope-payload-string",
-      "definition": "EventEnvelope",
-      "expect": "invalid",
-      "base": "event-envelope-session-text-delta",
-      "patch": [
-        {
-          "op": "replace",
-          "path": "/payload",
-          "value": "text"
-        }
-      ],
-      "note": "payload 须为对象或 null"
+      "note": "包络不含 sessionId(控制信封严格;身份只在 raw 内由域合同约束)"
     },
     {
       "name": "request-headers-session-family-unknown",

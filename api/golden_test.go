@@ -188,11 +188,40 @@ type pathError string
 func (e pathError) Error() string { return "path segment not found: " + string(e) }
 func errPath(key string) error    { return pathError(key) }
 
+// goldenCounts locks the vendored golden (doc/rfc/unified-v1.golden.json, sha256 7c6baad1…): 161 vectors,
+// 40 valid / 121 invalid, of which EventEnvelope has 7 valid / 18 invalid (D18 seven-key wire form).
+// Re-vendoring a new golden must update these numbers together with contract/PROVENANCE.json.
+const (
+	goldenTotal           = 161
+	goldenValid           = 40
+	goldenInvalid         = 121
+	goldenEnvelopeValid   = 7
+	goldenEnvelopeInvalid = 18
+)
+
+// goldenNamed are vectors whose presence the Go port depends on by name (fakes and D18 regressions).
+var goldenNamed = []string{
+	"unified-error-v2-session-not-found-wire",
+	"event-envelope-session-text-delta",
+	"event-envelope-session-turn-completed",
+	"event-envelope-session-replay-gap",
+	"event-envelope-archive-status-coverage",
+	"event-envelope-archive-material-consumed",
+	"event-envelope-terminal-output-block",
+	"event-envelope-unknown-type-raw",
+	"event-envelope-seq-present",
+	"event-envelope-payload-present",
+	"event-envelope-event-id-missing",
+	"event-envelope-raw-null",
+	"event-envelope-archive-coverage-partial",
+}
+
 // TestGoldenVectors validates every unified-v1 golden vector: positives must pass, negatives must fail;
 // positives must additionally decode into the typed structs without unknown fields.
 func TestGoldenVectors(t *testing.T) {
 	golden, byName := loadGolden(t)
 	counts := map[string]int{}
+	envelopes := map[string]int{}
 	for i := range golden.Vectors {
 		v := &golden.Vectors[i]
 		t.Run(v.Name, func(t *testing.T) {
@@ -216,10 +245,21 @@ func TestGoldenVectors(t *testing.T) {
 				t.Fatalf("unknown expect %q", v.Expect)
 			}
 			counts[v.Expect]++
+			if v.Definition == DefEventEnvelope {
+				envelopes[v.Expect]++
+			}
 		})
 	}
-	if counts["valid"] < 30 || counts["invalid"] < 100 {
-		t.Fatalf("unexpected vector counts: %v", counts)
+	if len(golden.Vectors) != goldenTotal || counts["valid"] != goldenValid || counts["invalid"] != goldenInvalid {
+		t.Fatalf("vector counts %d %v differ from the vendored golden lock (%d: %d valid / %d invalid)", len(golden.Vectors), counts, goldenTotal, goldenValid, goldenInvalid)
+	}
+	if envelopes["valid"] != goldenEnvelopeValid || envelopes["invalid"] != goldenEnvelopeInvalid {
+		t.Fatalf("EventEnvelope vectors %v, want %d valid / %d invalid", envelopes, goldenEnvelopeValid, goldenEnvelopeInvalid)
+	}
+	for _, name := range goldenNamed {
+		if _, ok := byName[name]; !ok {
+			t.Fatalf("golden lacks vector %q", name)
+		}
 	}
 }
 
@@ -288,46 +328,71 @@ func assertTyped(t *testing.T, definition string, value any) {
 	}
 }
 
-// TestEventEnvelopeTransitionalForms: D18 seven-key wire (no seq / payload) and today's six-key
-// server form (no eventId) decode; a generic cursor position or an identity key never does.
-func TestEventEnvelopeTransitionalForms(t *testing.T) {
+// TestEventEnvelopeSevenKeys: the D18 wire form decodes (eventId string or null, hyphenated event
+// types, Coverage object only in archiveCoverage); every departure from the seven keys — the retired
+// six-key / nine-key forms included — is CodeInvalidEnvelope.
+func TestEventEnvelopeSevenKeys(t *testing.T) {
+	const nullCursors = `{"eventCursor":null,"archiveCoverage":null,"outputWatermark":null,"materialConsumed":null,"ackReceipt":null}`
 	seven := `{"contract":"unified-v1","eventId":"12","domain":"session","type":"msg.text.delta","cursorSet":{"eventCursor":"12","archiveCoverage":null,"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":null,"raw":{"type":"msg.text.delta","text":"hi"}}`
 	env, err := ParseEventEnvelope([]byte(seven))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env.EventID == nil || *env.EventID != "12" || env.Seq != nil || env.Payload != nil || env.IsTerminal() {
+	if env.EventID == nil || *env.EventID != "12" || env.Type == nil || *env.Type != "msg.text.delta" || env.IsTerminal() {
 		t.Fatalf("seven-key form: %+v", env)
 	}
 	if cur, ok := env.CursorSet.EventCursor.Text(); !ok || cur != "12" || !env.CursorSet.AckReceipt.IsNull() {
 		t.Fatalf("cursor positions: %+v", env.CursorSet)
 	}
-	if string(env.PayloadOrRaw()) != `{"type":"msg.text.delta","text":"hi"}` {
-		t.Fatalf("PayloadOrRaw: %s", env.PayloadOrRaw())
+	if string(env.Raw) != `{"type":"msg.text.delta","text":"hi"}` {
+		t.Fatalf("raw must be the original object bytes: %s", env.Raw)
 	}
-	six := `{"contract":"unified-v1","domain":"archive","type":null,"cursorSet":{"eventCursor":"c-1","archiveCoverage":{"fromSequence":"1","throughSequence":"9","headDigest":"x"},"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":"completed","raw":{"unknown":true}}`
-	env, err = ParseEventEnvelope([]byte(six))
-	if err != nil {
-		t.Fatal(err)
+	// control frame without id: → eventId and eventCursor are both null; hyphenated types are legal
+	// (terminal operation-cancelled, archive.records-available); archiveCoverage carries a Coverage object.
+	for _, good := range []string{
+		`{"contract":"unified-v1","eventId":null,"domain":"session","type":"server.replay.gap","cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":{"type":"server.replay.gap"}}`,
+		`{"contract":"unified-v1","eventId":null,"domain":"terminal","type":"operation-cancelled","cursorSet":` + nullCursors + `,"terminalStatus":"aborted","raw":{"type":"operation-cancelled"}}`,
+		`{"contract":"unified-v1","eventId":"c-1","domain":"archive","type":"archive.records-available","cursorSet":{"eventCursor":"c-1","archiveCoverage":null,"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":null,"raw":{"eventType":"archive.records-available"}}`,
+		`{"contract":"unified-v1","eventId":"c-2","domain":"archive","type":null,"cursorSet":{"eventCursor":"c-2","archiveCoverage":{"fromSequence":"1","throughSequence":"9","headDigest":"` + strings.Repeat("a", 64) + `"},"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":"completed","raw":{"unknown":true}}`,
+	} {
+		env, err := ParseEventEnvelope([]byte(good))
+		if err != nil {
+			t.Fatalf("%s: %v", good, err)
+		}
+		if env.Domain == "archive" && env.Type == nil {
+			if _, ok := env.CursorSet.ArchiveCoverage.Text(); ok || env.CursorSet.ArchiveCoverage.IsNull() || !env.IsTerminal() {
+				t.Fatalf("coverage object must be neither text nor null: %+v", env.CursorSet)
+			}
+		}
 	}
-	if env.EventID != nil || env.Type != nil || !env.IsTerminal() {
-		t.Fatalf("six-key form: %+v", env)
-	}
-	if _, ok := env.CursorSet.ArchiveCoverage.Text(); ok || env.CursorSet.ArchiveCoverage.IsNull() {
-		t.Fatal("coverage object must be neither text nor null")
-	}
-	for _, bad := range []string{
-		`{"contract":"unified-v1","domain":"session","type":null,"cursorSet":{"eventCursor":null,"archiveCoverage":null,"outputWatermark":null,"materialConsumed":null,"ackReceipt":null,"cursor":"1"},"terminalStatus":null,"raw":null}`,
-		`{"contract":"unified-v1","domain":"session","type":null,"cursorSet":{"eventCursor":null,"archiveCoverage":null,"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":null,"raw":null,"sessionId":"s"}`,
-		`{"contract":"unified-v1","domain":"session","type":null,"cursorSet":{"eventCursor":null,"archiveCoverage":null,"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":null}`,
-		`{"contract":"unified-v2","domain":"session","type":null,"cursorSet":{"eventCursor":null,"archiveCoverage":null,"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":null,"raw":null}`,
-		`[]`,
-		`not json`,
+	for name, bad := range map[string]string{
+		"six-key (no eventId)":    `{"contract":"unified-v1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":{}}`,
+		"nine-key seq":            `{"contract":"unified-v1","eventId":"1","seq":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":{}}`,
+		"nine-key payload":        `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"payload":{},"raw":{}}`,
+		"raw null":                `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":null}`,
+		"raw string":              `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":"{}"}`,
+		"raw array":               `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":[]}`,
+		"raw missing":             `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null}`,
+		"terminalStatus missing":  `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"raw":{}}`,
+		"eventId empty":           `{"contract":"unified-v1","eventId":"","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":{}}`,
+		"eventId number":          `{"contract":"unified-v1","eventId":12,"domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":{}}`,
+		"eventId control char":    `{"contract":"unified-v1","eventId":"a\u0000b","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":{}}`,
+		"type uppercase":          `{"contract":"unified-v1","eventId":"1","domain":"session","type":"Msg.Text","cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":{}}`,
+		"sixth cursor position":   `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":{"eventCursor":null,"archiveCoverage":null,"outputWatermark":null,"materialConsumed":null,"ackReceipt":null,"cursor":"1"},"terminalStatus":null,"raw":{}}`,
+		"missing cursor position": `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":{"eventCursor":null,"archiveCoverage":null,"outputWatermark":null,"materialConsumed":null},"terminalStatus":null,"raw":{}}`,
+		"object in eventCursor":   `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":{"eventCursor":{"seq":"1"},"archiveCoverage":null,"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":null,"raw":{}}`,
+		"partial coverage":        `{"contract":"unified-v1","eventId":"1","domain":"archive","type":null,"cursorSet":{"eventCursor":null,"archiveCoverage":{"fromSequence":"1"},"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":null,"raw":{}}`,
+		"coverage extra member":   `{"contract":"unified-v1","eventId":"1","domain":"archive","type":null,"cursorSet":{"eventCursor":null,"archiveCoverage":{"fromSequence":"1","throughSequence":"9","headDigest":"` + strings.Repeat("a", 64) + `","extra":1},"outputWatermark":null,"materialConsumed":null,"ackReceipt":null},"terminalStatus":null,"raw":{}}`,
+		"identity field":          `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":{},"sessionId":"s"}`,
+		"other contract":          `{"contract":"unified-v2","eventId":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":null,"raw":{}}`,
+		"terminalStatus word":     `{"contract":"unified-v1","eventId":"1","domain":"session","type":null,"cursorSet":` + nullCursors + `,"terminalStatus":"done","raw":{}}`,
+		"array":                   `[]`,
+		"not json":                `not json`,
 	} {
 		_, err := ParseEventEnvelope([]byte(bad))
 		var cerr *ClientError
 		if !errorsAs(err, &cerr) || cerr.Code != CodeInvalidEnvelope {
-			t.Fatalf("expected invalid_envelope for %s, got %v", bad, err)
+			t.Fatalf("%s: expected invalid_envelope, got %v", name, err)
 		}
 	}
 }

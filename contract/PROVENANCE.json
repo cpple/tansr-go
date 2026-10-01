@@ -1,19 +1,26 @@
 {
   "description": "tansr-go 合同对照物(只读拷贝)。事实源在 cpple/tansr(tansr-cli)仓;本目录文件不得手改,变更只经重新拷贝并更新本登记。生成器 `go run ./internal/gen/manifest2go -check` 以 api-manifest.json 为唯一输入产出 api/operations_gen.go。",
   "sourceRepo": "cpple/tansr",
-  "sourceCommit": "713fe4c68355249ae6500f831df8d82650590446",
+  "sourceBranch": "lane/uapi/UAPI-01-facade",
+  "sourceCommit": "5fce791d8d62b97e7931b794bb37fab175b60db3",
   "observed": "2026-10-01",
   "files": {
     "api-manifest.json": {
       "source": "packages/server/contract/api-manifest.json",
-      "sha256": "759dfb2fd7f2fac1394f304e24355c4bb6daf97748622b4ce76650d55be6c1c5",
-      "revision": 4
+      "sha256": "42a6b867877565f9afcdabfb87c5f5187864b5679f80bb0da70f7f52f86448b3",
+      "revision": 6,
+      "schemaHash": "19cafed0f01d3fdb8b8aac695980db30dec43bbd1729824d8c5bc8644a84b4b1"
+    },
+    "unified-v1.schema.json": {
+      "source": "doc/rfc/unified-v1.schema.json",
+      "sha256": "a2449bc121b5183e50b0c2432d29042446659ec8b32b355af7f204c6cb684a8e"
     },
     "unified-v1.golden.json": {
       "source": "doc/rfc/unified-v1.golden.json",
-      "sha256": "1ca7a95df7a0f3553733ac73c46c2bc1c7f35fa85ba054c7e68f37f2192c4e9c",
+      "sha256": "7c6baad1e7053d57249c19b4c0aeda014a812c98662ec94878e0ec0d1dda0773",
       "schemaSource": "doc/rfc/unified-v1.schema.json",
-      "schemaSha256": "aa1037bea4d0d193a64e7c999b1d531efb9699aa90b409c66211841024431310"
+      "schemaSha256": "a2449bc121b5183e50b0c2432d29042446659ec8b32b355af7f204c6cb684a8e",
+      "vectors": 161
     },
     "canonical-cross-vectors.json": {
       "source": "scripts/api/fixtures/canonical-cross-vectors.json",

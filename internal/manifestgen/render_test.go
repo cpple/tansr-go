@@ -21,7 +21,7 @@ func TestRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, want := range []string{"package api", "const ManifestRevision = 4", `Path: "/api/sessions/:id/tool-results/:targetId", Params: []string{"id", "targetId"}`} {
+	for _, want := range []string{"package api", "const ManifestRevision = 6", `Path: "/api/sessions/:id/tool-results/:targetId", Params: []string{"id", "targetId"}`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("rendered source lacks %q", want)
 		}
