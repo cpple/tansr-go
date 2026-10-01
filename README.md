@@ -3,8 +3,8 @@
 tansr 统一 `/api` 合同(RFC-UAPI-1,`unified-v1`)的 Go SDK。
 Go SDK for the tansr unified `/api` contract (RFC-UAPI-1, `unified-v1`).
 
-**状态 / Status:骨架(skeleton,UAPI-01 阶段四 U4-GO)。** 标准库实现,零第三方依赖;真实 Serve 联调待主线。
-Standard library only, zero third-party dependencies; validation against a real Serve is pending on the mainline.
+**状态 / Status:骨架(skeleton,UAPI-01 阶段四 U4-GO;V-GO 验收对齐 manifest revision 6 与 D18 七键事件包络,2026-10-01)。** 标准库实现,零第三方依赖;`api` / `canonical` / `sse` 有实现与测试,`executor` / `archive` 仅接口定义;真实 Serve 联调待主线。
+Standard library only, zero third-party dependencies; `api` / `canonical` / `sse` are implemented and tested, `executor` / `archive` are interface definitions only; validation against a real Serve is pending on the mainline.
 
 ```
 module github.com/cpple/tansr-go   (go 1.25)

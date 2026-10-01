@@ -7,12 +7,13 @@
 
 | 本仓副本 | 事实源 | 用途 |
 | --- | --- | --- |
-| `contract/api-manifest.json` | `packages/server/contract/api-manifest.json` | **唯一**的操作目录事实源 → `api/operations_gen.go` |
-| `contract/unified-v1.golden.json` | `doc/rfc/unified-v1.golden.json`(schema `doc/rfc/unified-v1.schema.json`) | `api` 类型形状与正负向量测试 |
+| `contract/api-manifest.json` | `packages/server/contract/api-manifest.json`(revision 6) | **唯一**的操作目录事实源 → `api/operations_gen.go` |
+| `contract/unified-v1.schema.json` | `doc/rfc/unified-v1.schema.json` | `api/schema.go` 逐定义对照的校验规则来源(只读对照物,Go 不在运行时加载) |
+| `contract/unified-v1.golden.json` | `doc/rfc/unified-v1.golden.json`(161 向量) | `api` 类型形状与正负向量测试(`api/golden_test.go` 锁定向量计数) |
 | `contract/canonical-cross-vectors.json` | `scripts/api/fixtures/canonical-cross-vectors.json` | `canonical` 127 交叉向量 |
 | `contract/sdk2-wire-v1.json` | `scripts/sdk2/fixtures/sdk2-wire-v1.json` | canonical 字节金样、路径段编码 |
 
-来源提交与 sha256 登记在 `contract/PROVENANCE.json`;更新副本时同步更新该文件。
+来源提交与 sha256 登记在 `contract/PROVENANCE.json`;更新副本时同步更新该文件,并同步 `api/golden_test.go` 的向量计数锁、`api/client_test.go` / `internal/manifestgen/render_test.go` 的锁定 revision。
 
 ## 生成
 
@@ -25,7 +26,8 @@ go test ./internal/manifestgen -update       # 宿主拒绝启动新编译可执
 
 - **禁止手写路径、方法、查询键、域名**:一切来自 manifest;`operations_gen.go` 不得手改。
 - `api/schema.go` 的校验规则逐条对应 `unified-v1.schema.json` 的定义;改 schema 先改副本与 PROVENANCE,再跑 golden 测试。
-- `EventEnvelope` 按 D18 七键出形并容忍过渡形(schema 九键 / 今日六键);U3-ALIGN 收口后收窄。
+- `EventEnvelope` 严格按 D18 七键 `{contract, eventId, domain, type, cursorSet, terminalStatus, raw}` 解析:缺键 / 第八键(含旧形 `seq` / `payload`)/ `raw` 非对象 → `invalid_envelope`;`archiveCoverage` 唯一允许对象形(schema `ArchiveCoverage`)。不再容忍过渡形。
+- `sse.Reader` 按 WHATWG 分发规则:无 `data` 字段的帧不分发(`id:` 仍推进 `LastEventID`),与 Node `SseParser` 同律。
 
 ## 门禁
 
