@@ -461,7 +461,7 @@ func decodeErrorBody(status int, meta Meta, value any, data []byte, op *Operatio
 		}
 		apiErr := &APIError{
 			Code: envelope.Code, Status: status, RetryAction: envelope.RetryAction, TraceID: envelope.TraceID,
-			RequestID: envelope.RequestID, Message: envelope.Message, Detail: envelope.Detail, Meta: meta,
+			RequestID: envelope.RequestID, Message: envelope.Message, Detail: detailFrom(envelope.Detail), Meta: meta,
 			RetryAfter: meta.RetryAfter, HasRetryAfter: meta.HasRetryAfter,
 		}
 		if envelope.RetryAfterMs != nil {

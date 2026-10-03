@@ -9,17 +9,17 @@ import (
 
 // DomainRetryActionMap maps each family's own retryAction word to the unified action (RFC-UAPI-1 §2.3).
 // Unregistered words map to none.
-var DomainRetryActionMap = map[string]string{
-	"none":               "none",
-	"same-request":       "same-request",
-	"backoff":            "same-request",
-	"query-status":       "query-status",
-	"reconcile":          "query-status",
-	"rebind":             "rebind",
-	"refresh":            "refresh",
-	"refresh-projection": "refresh",
-	"discover":           "rediscover",
-	"rediscover":         "rediscover",
+var DomainRetryActionMap = map[string]RetryAction{
+	"none":               ActionNone,
+	"same-request":       ActionSameRequest,
+	"backoff":            ActionSameRequest,
+	"query-status":       ActionQueryStatus,
+	"reconcile":          ActionQueryStatus,
+	"rebind":             ActionRebind,
+	"refresh":            ActionRefresh,
+	"refresh-projection": ActionRefresh,
+	"discover":           ActionRediscover,
+	"rediscover":         ActionRediscover,
 }
 
 // resultUnknownCodes have an unknown side effect: only query-status / rebind are ever permitted and a
@@ -29,7 +29,7 @@ var resultUnknownCodes = map[string]bool{"result_unknown": true, "commit_unknown
 // RetryAdvice normalises the retry guidance of an error.
 type RetryAdvice struct {
 	// Action is the unified action (RetryActions vocabulary).
-	Action string
+	Action RetryAction
 	// Stated is true when the server explicitly gave an action (/v2 family envelopes have none → false;
 	// never inferred as replayable).
 	Stated bool
@@ -51,17 +51,17 @@ type RetryAdvice struct {
 func Advice(err error) RetryAdvice {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
-		unknown := resultUnknownCodes[apiErr.Code] || resultUnknownCodes[apiErr.DomainCode()]
+		unknown := resultUnknownCodes[string(apiErr.Code)] || resultUnknownCodes[apiErr.Detail.DomainCode]
 		action := apiErr.RetryAction
-		if unknown && action == "same-request" {
-			action = "query-status"
+		if unknown && action == ActionSameRequest {
+			action = ActionQueryStatus
 		}
-		domainAction := apiErr.DomainRetryAction()
+		domainAction := apiErr.Detail.DomainRetryAction
 		if domainAction == "" {
-			domainAction = apiErr.RetryAction
+			domainAction = string(apiErr.RetryAction)
 		}
-		advice := RetryAdvice{Action: action, Stated: true, DomainRetryAction: domainAction, RetryAfter: apiErr.RetryAfter, HasRetryAfter: apiErr.HasRetryAfter, Replayable: action == "same-request", Source: "unified"}
-		if action == "rediscover" {
+		advice := RetryAdvice{Action: action, Stated: true, DomainRetryAction: domainAction, RetryAfter: apiErr.RetryAfter, HasRetryAfter: apiErr.HasRetryAfter, Replayable: action == ActionSameRequest, Source: "unified"}
+		if action == ActionRediscover {
 			advice.ClosureID = apiErr.ClosureID()
 		}
 		return advice
@@ -69,18 +69,18 @@ func Advice(err error) RetryAdvice {
 	var domainErr *DomainError
 	if errors.As(err, &domainErr) {
 		stated := domainErr.RetryAction != ""
-		mapped := "none"
+		mapped := ActionNone
 		if stated {
 			if m, ok := DomainRetryActionMap[domainErr.RetryAction]; ok {
 				mapped = m
 			}
 		}
-		if resultUnknownCodes[domainErr.Code] && mapped == "same-request" {
-			mapped = "query-status"
+		if resultUnknownCodes[domainErr.Code] && mapped == ActionSameRequest {
+			mapped = ActionQueryStatus
 		}
-		return RetryAdvice{Action: mapped, Stated: stated, DomainRetryAction: domainErr.RetryAction, RetryAfter: domainErr.RetryAfter, HasRetryAfter: domainErr.HasRetryAfter, Replayable: stated && mapped == "same-request", Source: "domain"}
+		return RetryAdvice{Action: mapped, Stated: stated, DomainRetryAction: domainErr.RetryAction, RetryAfter: domainErr.RetryAfter, HasRetryAfter: domainErr.HasRetryAfter, Replayable: stated && mapped == ActionSameRequest, Source: "domain"}
 	}
-	return RetryAdvice{Action: "none", Source: "none"}
+	return RetryAdvice{Action: ActionNone, Source: "none"}
 }
 
 // SameRequest describes the original Call verbatim (same operation, same options, same
@@ -164,7 +164,7 @@ func defaultSleep(ctx context.Context, d time.Duration) error {
 func RetrySameRequest(ctx context.Context, client *Client, cause error, req SameRequest, opts RetryOptions) (*Result, error) {
 	advice := Advice(cause)
 	if !advice.Replayable {
-		detail := "server advised " + advice.Action
+		detail := "server advised " + string(advice.Action)
 		if !advice.Stated {
 			detail += " (not stated)"
 		}

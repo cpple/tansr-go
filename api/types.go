@@ -206,14 +206,14 @@ const (
 	StateUnavailable = "unavailable"
 )
 
-// ErrorEnvelope is the wire form of FacadeError / UnifiedError.
+// ErrorEnvelope is the wire form of FacadeError / UnifiedError (APIError is its decoded, typed view).
 type ErrorEnvelope struct {
 	Contract     string         `json:"contract"`
 	TraceID      string         `json:"traceId"`
 	RequestID    *string        `json:"requestId"`
-	Code         string         `json:"code"`
+	Code         ErrorCode      `json:"code"`
 	Status       int            `json:"status"`
-	RetryAction  string         `json:"retryAction"`
+	RetryAction  RetryAction    `json:"retryAction"`
 	RetryAfterMs *int64         `json:"retryAfterMs,omitempty"`
 	Message      string         `json:"message"`
 	Detail       map[string]any `json:"detail,omitempty"`

@@ -456,14 +456,18 @@ func TestWriteWithClosure(t *testing.T) {
 	stale := strings.Repeat("b", 64)
 	_, err = c.Call(ctx, OpSessionMessageSend, CallOptions{Params: map[string]string{"id": session.ID}, Body: map[string]any{"text": "hi"}, ClosureID: stale})
 	var apiErr *APIError
-	if !errors.As(err, &apiErr) || apiErr.Code != "precondition_failed" || apiErr.Status != 412 || apiErr.RetryAction != "rediscover" {
+	if !errors.As(err, &apiErr) || apiErr.Code != CodePreconditionFailed || apiErr.Status != 412 || apiErr.RetryAction != ActionRediscover {
 		t.Fatalf("expected 412 precondition_failed, got %v", err)
 	}
-	if apiErr.DomainCode() != "closure_stale" || apiErr.ClosureID() == "" || apiErr.RequestID != nil || apiErr.TraceID == "" {
+	// D19: the unified code is primary; the family code is the secondary Detail position
+	if apiErr.Detail.DomainCode != "closure_stale" || !apiErr.Detail.Present() || apiErr.ClosureID() == "" || apiErr.RequestID != nil || apiErr.TraceID == "" {
 		t.Fatalf("precondition detail: %+v", apiErr)
 	}
+	if !errors.Is(err, &APIError{Code: CodePreconditionFailed}) || errors.Is(err, &APIError{Code: CodeConflict}) || errors.Is(err, &APIError{Code: CodePreconditionFailed, Status: 412}) {
+		t.Fatalf("errors.Is on the unified code: %v", err)
+	}
 	advice := Advice(apiErr)
-	if advice.Action != "rediscover" || advice.Replayable || advice.ClosureID != apiErr.ClosureID() {
+	if advice.Action != ActionRediscover || advice.Replayable || advice.ClosureID != apiErr.ClosureID() {
 		t.Fatalf("advice: %+v", advice)
 	}
 	// local guards

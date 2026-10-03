@@ -135,7 +135,8 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// describe renders the error surface without echoing tokens or bodies.
+// describe renders the error surface without echoing tokens or bodies. The unified code decides the
+// branch (plan D19: one `switch code` across every tansr SDK); the family code is only shown as detail.
 func describe(err error) error {
 	var apiErr *api.APIError
 	var domainErr *api.DomainError
@@ -147,9 +148,22 @@ func describe(err error) error {
 		return fmt.Errorf("server did not echo the event envelope negotiation: %w", err)
 	case errors.As(err, &apiErr):
 		advice := api.Advice(apiErr)
-		return fmt.Errorf("%w (retryAction %s, replayable %v)", apiErr, advice.Action, advice.Replayable)
+		hint := ""
+		switch apiErr.Code {
+		case api.CodeCapabilityUnavailable:
+			hint = " — not installed or outside the closure on this deployment; nothing to fall back to"
+		case api.CodePreconditionFailed:
+			hint = " — re-read (closure / resource revision) before writing again"
+		case api.CodeResultUnknown:
+			hint = " — side effect unknown: query the receipt, never replay with a new key"
+		}
+		detail := ""
+		if apiErr.Detail.Present() {
+			detail = fmt.Sprintf(" [reason=%q domainCode=%q]", apiErr.Detail.Reason, apiErr.Detail.DomainCode)
+		}
+		return fmt.Errorf("%w (retryAction %s, replayable %v)%s%s", apiErr, advice.Action, advice.Replayable, detail, hint)
 	case errors.As(err, &domainErr):
-		return fmt.Errorf("%w (family envelope, retryAction %q)", domainErr, domainErr.RetryAction)
+		return fmt.Errorf("%w (unwrapped family envelope, retryAction %q → %s)", domainErr, domainErr.RetryAction, api.Advice(domainErr).Action)
 	case errors.As(err, &clientErr):
 		return fmt.Errorf("local: %w", clientErr)
 	}
