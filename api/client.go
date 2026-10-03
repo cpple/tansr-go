@@ -58,6 +58,8 @@ type Options struct {
 	// OnContract observes the unified headers of every /api response (diagnostics only; the client
 	// never switches logic on it).
 	OnContract func(Observation)
+	// Now is the clock used for CallOptions.Deadline checks (default time.Now; injectable for tests).
+	Now func() time.Time
 }
 
 // Observation is the contract seen on the latest /api response.
@@ -89,6 +91,7 @@ type Client struct {
 	maxResponse   int64
 	maxFrame      int
 	onContract    func(Observation)
+	now           func() time.Time
 
 	mu       sync.Mutex
 	observed *Observation
@@ -128,6 +131,10 @@ func New(opts Options) (*Client, error) {
 		maxResponse:   opts.MaxResponseBytes,
 		maxFrame:      opts.MaxEventFrameBytes,
 		onContract:    opts.OnContract,
+		now:           opts.Now,
+	}
+	if c.now == nil {
+		c.now = time.Now
 	}
 	if c.http == nil {
 		c.http = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect }}
@@ -221,8 +228,17 @@ type CallOptions struct {
 	Body any
 	// ClosureID → tansr-closure-id (session-scoped write operations only; mismatch → 412 precondition_failed).
 	ClosureID string
-	// IdempotencyKey → Idempotency-Key (write operations only; printable ASCII 1–128).
+	// IdempotencyKey → Idempotency-Key (write operations only; printable ASCII 1–128). Serve maps it to
+	// the family requestId (Operation.RequestIDPath) and replays the retained receipt for the same key.
 	IdempotencyKey string
+	// IfMatch → If-Match: the ETag of a prior read (`"<revision>"`, or the bare revision which is quoted
+	// on the wire). Accepted only by operations with Operation.AcceptsIfMatch (manifest expectedRevision);
+	// Serve maps it to the body expectedRevision and answers 412 precondition_failed / refresh when stale.
+	IfMatch string
+	// Deadline → deadline (RFC 3339 UTC). An already-expired deadline fails locally with
+	// CodeDeadlineExceeded and nothing is sent; Serve answers 408 invalid_request / deadline_exceeded
+	// and the SDK never extends or retries past it.
+	Deadline time.Time
 	// MaxResponseBytes overrides the client default for this call.
 	MaxResponseBytes int64
 }
@@ -341,6 +357,25 @@ func (c *Client) Call(ctx context.Context, operation string, opts CallOptions) (
 			return nil, newClientError(CodeInvalidIdempotencyKey, operation+": Idempotency-Key applies to write operations only")
 		}
 		headers.Set("Idempotency-Key", opts.IdempotencyKey)
+	}
+	if opts.IfMatch != "" {
+		normalized, ok := NormalizeIfMatch(opts.IfMatch)
+		if !ok {
+			return nil, newClientError(CodeInvalidIfMatch, `If-Match must be the strong ETag form "<revision>" (or the bare decimal revision)`)
+		}
+		if !op.AcceptsIfMatch() {
+			return nil, newClientError(CodeIfMatchNotApplicable, operation+": If-Match applies to write operations that declare expectedRevision only")
+		}
+		headers.Set("If-Match", normalized)
+	}
+	if !opts.Deadline.IsZero() {
+		if year := opts.Deadline.Year(); year < 1 || year > 9999 {
+			return nil, newClientError(CodeInvalidDeadline, "Deadline must be representable as RFC 3339")
+		}
+		if !opts.Deadline.After(c.now()) {
+			return nil, newClientError(CodeDeadlineExceeded, "Deadline "+FormatDeadline(opts.Deadline)+" has already passed; the request was not sent")
+		}
+		headers.Set("Deadline", FormatDeadline(opts.Deadline))
 	}
 	body, contentType, err := encodeBody(op, opts.Body, c.maxResponse)
 	if err != nil {

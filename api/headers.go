@@ -23,9 +23,37 @@ const (
 	HeaderSessionFamily    = "tansr-session-family"
 	HeaderTraceID          = "x-request-id"
 	HeaderIdempotencyKey   = "idempotency-key"
+	HeaderIfMatch          = "if-match"
+	HeaderETag             = "etag"
+	HeaderDeadline         = "deadline"
 	HeaderRetryAfter       = "retry-after"
 	HeaderLastEventID      = "last-event-id"
 )
+
+var (
+	// strongETagRule is the only ETag / If-Match form the manifest r7 three heads accept: the resource's
+	// revision as a quoted decimal. Weak validators (W/"…") and wildcards (*) are not a tansr form.
+	strongETagRule = regexp.MustCompile(`^"(0|[1-9][0-9]{0,18})"$`)
+	bareRevision   = regexp.MustCompile(`^(0|[1-9][0-9]{0,18})$`)
+)
+
+// NormalizeIfMatch accepts the strong form `"<revision>"` or a bare decimal revision (quoted on the
+// wire) and reports false for anything else. Mirrors Node @tansr/api-client `./api` normalizeIfMatch.
+func NormalizeIfMatch(value string) (string, bool) {
+	text := strings.TrimSpace(value)
+	if strongETagRule.MatchString(text) {
+		return text, true
+	}
+	if bareRevision.MatchString(text) {
+		return `"` + text + `"`, true
+	}
+	return "", false
+}
+
+// FormatDeadline renders the `deadline` request header: RFC 3339 in UTC (the only form Serve accepts).
+func FormatDeadline(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
 
 // Meta is the decoded projection of the unified response headers (schema ResponseHeaders).
 type Meta struct {
@@ -47,6 +75,9 @@ type Meta struct {
 	// RetryAfter is the decoded retry-after header; HasRetryAfter is false when absent/unparsable.
 	RetryAfter    time.Duration
 	HasRetryAfter bool
+	// ETag is the strong validator `"<revision>"` of a versioned resource (manifest etagPath); "" when
+	// absent or not in the strong form. Pass it back verbatim as CallOptions.IfMatch.
+	ETag string
 }
 
 var (
@@ -116,6 +147,9 @@ func readUnifiedHeaders(resp *http.Response) (Meta, error) {
 		meta.TraceID = trace
 	}
 	meta.RetryAfter, meta.HasRetryAfter = ParseRetryAfter(resp.Header.Get(HeaderRetryAfter), time.Now())
+	if etag := strings.TrimSpace(resp.Header.Get(HeaderETag)); strongETagRule.MatchString(etag) {
+		meta.ETag = etag
+	}
 	return meta, nil
 }
 

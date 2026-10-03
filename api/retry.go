@@ -90,49 +90,60 @@ type SameRequest struct {
 	Options   CallOptions
 }
 
-// IdempotencyKeyOf returns the key the request carried: Idempotency-Key first, then the body's
-// top-level requestId, then request.requestId (the family control-envelope form); "" when none.
+// IdempotencyKeyOf returns the key the request carried: Idempotency-Key first, then the body position
+// the operation's family declares as its requestId (manifest r7 requestIdPath, e.g. request.requestId
+// for sdk2-ext-v1; agent-session-v1 has none and relies on the header); "" when none.
 func IdempotencyKeyOf(req SameRequest) string {
 	if req.Options.IdempotencyKey != "" {
 		return req.Options.IdempotencyKey
 	}
-	switch body := req.Options.Body.(type) {
+	op, ok := Lookup(req.Operation)
+	if !ok || op.RequestIDPath() == nil {
+		return ""
+	}
+	return stringAtPath(bodyAsGeneric(req.Options.Body), op.RequestIDPath())
+}
+
+// bodyAsGeneric views a CallOptions.Body as decoded JSON (nil for no body / octet-stream / unencodable).
+func bodyAsGeneric(body any) any {
+	switch b := body.(type) {
 	case nil, []byte:
-		return ""
+		return nil
 	case map[string]any:
-		if id, _ := body["requestId"].(string); id != "" {
-			return id
-		}
-		if nested, ok := body["request"].(map[string]any); ok {
-			id, _ := nested["requestId"].(string)
-			return id
-		}
-		return ""
+		return b
 	case json.RawMessage:
-		return requestIDOfJSON(body)
+		var decoded any
+		if json.Unmarshal(b, &decoded) != nil {
+			return nil
+		}
+		return decoded
 	default:
 		data, err := json.Marshal(body)
 		if err != nil {
-			return ""
+			return nil
 		}
-		return requestIDOfJSON(data)
+		var decoded any
+		if json.Unmarshal(data, &decoded) != nil {
+			return nil
+		}
+		return decoded
 	}
 }
 
-func requestIDOfJSON(data []byte) string {
-	var probe struct {
-		RequestID string `json:"requestId"`
-		Request   struct {
-			RequestID string `json:"requestId"`
-		} `json:"request"`
+// stringAtPath walks a KeyPath through decoded JSON and returns the string found ("" otherwise).
+func stringAtPath(value any, path []string) string {
+	for _, key := range path {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return ""
+		}
+		value, ok = object[key]
+		if !ok {
+			return ""
+		}
 	}
-	if json.Unmarshal(data, &probe) != nil {
-		return ""
-	}
-	if probe.RequestID != "" {
-		return probe.RequestID
-	}
-	return probe.Request.RequestID
+	text, _ := value.(string)
+	return text
 }
 
 // RetryOptions tune RetrySameRequest.
@@ -182,6 +193,17 @@ func RetrySameRequest(ctx context.Context, client *Client, cause error, req Same
 	}
 	if advice.HasRetryAfter && advice.RetryAfter > maxWait {
 		return nil, newClientError(CodeRetryAfterExceedsBudget, "server asked to wait "+advice.RetryAfter.String()+", budget is "+maxWait.String())
+	}
+	if deadline := req.Options.Deadline; !deadline.IsZero() {
+		// The deadline is the caller's, never the SDK's to extend: a replay that could not even start
+		// before it fails here without sleeping (Node ./api retrySameRequest: now + wait >= deadline).
+		wait := time.Duration(0)
+		if advice.HasRetryAfter && advice.RetryAfter > 0 {
+			wait = advice.RetryAfter
+		}
+		if !client.now().Add(wait).Before(deadline) {
+			return nil, newClientError(CodeDeadlineExceeded, "replay would start at or after Deadline "+FormatDeadline(deadline)+"; the request was not replayed")
+		}
 	}
 	if advice.HasRetryAfter && advice.RetryAfter > 0 {
 		sleep := opts.Sleep

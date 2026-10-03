@@ -36,11 +36,26 @@ type fakeServe struct {
 	// lag the locked ManifestRevision: the client observes the difference and never switches on it.
 	revision   int
 	schemaHash string
+	// three heads (U7-HDR / manifest r7): the binding resource revision, retained receipts by
+	// Idempotency-Key (body → response), executions of the close write, and a knob that makes every
+	// deadline count as expired (Serve's clock, not the client's).
+	bindingRevision int
+	receipts        map[string]receipt
+	closes          int
+	expireDeadlines bool
+	now             func() time.Time
+}
+
+type receipt struct {
+	body     string
+	status   int
+	etag     string
+	response map[string]any
 }
 
 func newFakeServe(t *testing.T) (*fakeServe, *httptest.Server) {
 	_, byName := loadGolden(t)
-	f := &fakeServe{t: t, golden: byName, echoEnvelope: true}
+	f := &fakeServe{t: t, golden: byName, echoEnvelope: true, bindingRevision: 3, receipts: map[string]receipt{}, now: time.Now}
 	closure := materialise(t, byName["closure-full-enabled"], byName).(map[string]any)
 	f.closureID = closure["closureId"].(string)
 	view := materialise(t, byName["manifest-runtime-view"], byName).(map[string]any)
@@ -189,6 +204,58 @@ func (f *fakeServe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, map[string]any{"protocol": "sdk2-ext-v1", "coverage": map[string]any{"throughSequence": "9"}})
+	case len(parts) == 4 && parts[1] == "archive" && parts[2] == "bindings" && r.Method == "GET":
+		// archive.binding.get — versioned read: ETag "<revision>" derived from etagPath (revision)
+		f.unified(w, "archive")
+		f.mu.Lock()
+		revision := f.bindingRevision
+		f.mu.Unlock()
+		w.Header().Set("ETag", `"`+strconv.Itoa(revision)+`"`)
+		writeJSON(w, 200, map[string]any{"protocol": "sdk2-ext-v1", "bindingId": parts[3], "revision": strconv.Itoa(revision), "status": "open"})
+	case len(parts) == 5 && parts[1] == "archive" && parts[2] == "bindings" && parts[4] == "close" && r.Method == "POST":
+		// archive.binding.close — the three heads in Serve order: deadline, Idempotency-Key, If-Match.
+		f.unified(w, "archive")
+		if deadline := r.Header.Get("Deadline"); deadline != "" {
+			at, err := time.Parse(time.RFC3339Nano, deadline)
+			if err != nil || !strings.HasSuffix(deadline, "Z") {
+				f.t.Errorf("client sent a non-RFC3339-UTC deadline %q", deadline)
+			}
+			if err != nil || f.expireDeadlines || !at.After(f.now()) {
+				writeJSON(w, 408, f.body("unified-error-deadline-expired"))
+				return
+			}
+		}
+		raw, _ := io.ReadAll(r.Body)
+		key := r.Header.Get("Idempotency-Key")
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if key != "" {
+			if kept, ok := f.receipts[key]; ok {
+				if kept.body != string(raw) {
+					writeJSON(w, 409, f.body("unified-error-idempotency-key-reused"))
+					return
+				}
+				if kept.etag != "" {
+					w.Header().Set("ETag", kept.etag)
+				}
+				writeJSON(w, kept.status, kept.response)
+				return
+			}
+		}
+		if ifMatch := r.Header.Get("If-Match"); ifMatch != "" && ifMatch != `"`+strconv.Itoa(f.bindingRevision)+`"` {
+			w.Header().Set("ETag", `"`+strconv.Itoa(f.bindingRevision)+`"`)
+			writeJSON(w, 412, f.body("unified-error-if-match-conflict"))
+			return
+		}
+		f.closes++
+		f.bindingRevision++
+		etag := `"` + strconv.Itoa(f.bindingRevision) + `"`
+		response := map[string]any{"protocol": "sdk2-ext-v1", "bindingId": parts[3], "revision": strconv.Itoa(f.bindingRevision), "status": "closed"}
+		if key != "" {
+			f.receipts[key] = receipt{body: string(raw), status: 200, etag: etag, response: response}
+		}
+		w.Header().Set("ETag", etag)
+		writeJSON(w, 200, response)
 	case len(parts) == 5 && parts[1] == "archive" && parts[4] == "events":
 		// archive stream that ignores the envelope negotiation (no echo)
 		f.unified(w, "archive")
@@ -576,6 +643,141 @@ func TestCanonicalBodiesAndRetry(t *testing.T) {
 	_, err = c.Call(ctx, OpArchiveAckCommit, CallOptions{Params: map[string]string{"id": "b-1"}, Body: json.RawMessage(`{"a":1}`)})
 	if err != nil {
 		t.Fatalf("canonical raw body must pass: %v", err)
+	}
+}
+
+// TestThreeHeads covers U7-HDR / manifest r7: Idempotency-Key (receipt replay with the same key),
+// If-Match ← ETag (versioned read → conditional write, 412 precondition_failed / refresh when stale)
+// and deadline (expired → rejected, never extended, never auto-retried). Semantics follow Node
+// @tansr/api-client ./api.
+func TestThreeHeads(t *testing.T) {
+	f, server := newFakeServe(t)
+	clock := time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)
+	f.now = func() time.Time { return clock } // Serve and client share one frozen clock here
+	c, err := New(Options{BaseURL: server.URL, Token: "t0ken", SessionFamily: "sdk2-offload-v1", Now: func() time.Time { return clock }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	params := map[string]string{"id": "b-1"}
+	closeBody := map[string]any{"protocol": "sdk2-ext-v1", "request": map[string]any{"requestId": "close-1"}, "reason": "done"}
+	var cerr *ClientError
+	var apiErr *APIError
+
+	// --- local guards: nothing leaves the process ---
+	_, err = c.Call(ctx, OpArchiveBindingClose, CallOptions{Params: params, Body: closeBody, IfMatch: `W/"3"`})
+	if !errors.As(err, &cerr) || cerr.Code != CodeInvalidIfMatch {
+		t.Fatalf("weak validator must be refused locally: %v", err)
+	}
+	_, err = c.Call(ctx, OpArchiveBindingClose, CallOptions{Params: params, Body: closeBody, IfMatch: "*"})
+	if !errors.As(err, &cerr) || cerr.Code != CodeInvalidIfMatch {
+		t.Fatalf("wildcard must be refused locally: %v", err)
+	}
+	_, err = c.Call(ctx, OpArchiveBindingGet, CallOptions{Params: params, IfMatch: `"3"`})
+	if !errors.As(err, &cerr) || cerr.Code != CodeIfMatchNotApplicable {
+		t.Fatalf("If-Match on a read: %v", err)
+	}
+	_, err = c.Call(ctx, OpSessionMessageSend, CallOptions{Params: map[string]string{"id": "s-1"}, Body: map[string]any{"text": "hi"}, IfMatch: `"3"`})
+	if !errors.As(err, &cerr) || cerr.Code != CodeIfMatchNotApplicable {
+		t.Fatalf("If-Match on a write without expectedRevision: %v", err)
+	}
+	_, err = c.Call(ctx, OpArchiveBindingClose, CallOptions{Params: params, Body: closeBody, Deadline: clock})
+	if !errors.As(err, &cerr) || cerr.Code != CodeDeadlineExceeded || !errors.Is(err, ErrDeadlineExceeded) {
+		t.Fatalf("deadline == now is already expired: %v", err)
+	}
+	_, err = c.Call(ctx, OpArchiveBindingClose, CallOptions{Params: params, Body: closeBody, Deadline: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)})
+	if !errors.As(err, &cerr) || cerr.Code != CodeInvalidDeadline {
+		t.Fatalf("unrepresentable deadline: %v", err)
+	}
+	if got := f.requests(); len(got) != 0 {
+		t.Fatalf("local guards must not send: %d requests", len(got))
+	}
+
+	// --- ETag → If-Match: read, then conditional write ---
+	read, err := c.Call(ctx, OpArchiveBindingGet, CallOptions{Params: params})
+	if err != nil || read.Meta.ETag != `"3"` {
+		t.Fatalf("read with ETag: %v %+v", err, read)
+	}
+	closed, err := c.Call(ctx, OpArchiveBindingClose, CallOptions{Params: params, Body: closeBody, IfMatch: read.Meta.ETag, IdempotencyKey: "k-1", Deadline: clock.Add(time.Hour)})
+	if err != nil || closed.Status != 200 || closed.Meta.ETag != `"4"` {
+		t.Fatalf("conditional close: %v %+v", err, closed)
+	}
+	// stale If-Match → 412 precondition_failed / refresh with reason if_match_stale and the family code in Detail
+	_, err = c.Call(ctx, OpArchiveBindingClose, CallOptions{Params: params, Body: closeBody, IfMatch: "3"}) // bare revision is quoted on the wire
+	if !errors.As(err, &apiErr) || apiErr.Code != CodePreconditionFailed || apiErr.Status != 412 || apiErr.RetryAction != ActionRefresh {
+		t.Fatalf("stale If-Match: %v", err)
+	}
+	if apiErr.Detail.Reason != ReasonIfMatchStale || apiErr.Detail.Header != HeaderIfMatch || apiErr.Detail.DomainCode != "revision_conflict" || apiErr.Detail.DomainStatus != 409 || apiErr.Meta.ETag != `"4"` {
+		t.Fatalf("stale If-Match detail: %+v", apiErr.Detail)
+	}
+	if adv := Advice(apiErr); adv.Action != ActionRefresh || adv.Replayable {
+		t.Fatalf("refresh is not a replay: %+v", adv)
+	}
+	_, err = RetrySameRequest(ctx, c, apiErr, SameRequest{Operation: OpArchiveBindingClose, Options: CallOptions{Params: params, Body: closeBody, IfMatch: "3"}}, RetryOptions{})
+	if !errors.As(err, &cerr) || cerr.Code != CodeNotRetryable {
+		t.Fatalf("412 must not be replayed: %v", err)
+	}
+
+	// --- Idempotency-Key: the same key replays the retained receipt, a different body is a 409 ---
+	again, err := c.Call(ctx, OpArchiveBindingClose, CallOptions{Params: params, Body: closeBody, IdempotencyKey: "k-1"})
+	if err != nil || again.Status != 200 || again.Meta.ETag != `"4"` || f.closes != 1 {
+		t.Fatalf("same key must replay the receipt, not execute again: %v %+v closes=%d", err, again, f.closes)
+	}
+	_, err = c.Call(ctx, OpArchiveBindingClose, CallOptions{Params: params, Body: map[string]any{"protocol": "sdk2-ext-v1", "request": map[string]any{"requestId": "close-2"}}, IdempotencyKey: "k-1"})
+	if !errors.As(err, &apiErr) || apiErr.Code != CodeConflict || apiErr.Status != 409 || apiErr.RetryAction != ActionNone || apiErr.Detail.Reason != ReasonIdempotencyKeyReused || apiErr.Detail.Header != HeaderIdempotencyKey {
+		t.Fatalf("same key, different body: %v", err)
+	}
+	if k := IdempotencyKeyOf(SameRequest{Operation: OpArchiveBindingClose, Options: CallOptions{Body: closeBody}}); k != "close-1" {
+		t.Fatalf("family requestIdPath request.requestId: %q", k)
+	}
+	if k := IdempotencyKeyOf(SameRequest{Operation: OpArchiveBindingClose, Options: CallOptions{Body: json.RawMessage(`{"request":{"requestId":"raw-1"}}`)}}); k != "raw-1" {
+		t.Fatalf("raw body requestIdPath: %q", k)
+	}
+	if k := IdempotencyKeyOf(SameRequest{Operation: OpSessionMessageSend, Options: CallOptions{Body: map[string]any{"requestId": "m-1"}}}); k != "" {
+		t.Fatalf("agent-session-v1 declares no body requestId position: %q", k)
+	}
+
+	// --- deadline: Serve's clock says expired → 408 invalid_request / none, reason deadline_exceeded ---
+	f.expireDeadlines = true
+	_, err = c.Call(ctx, OpArchiveBindingClose, CallOptions{Params: params, Body: closeBody, Deadline: clock.Add(time.Minute)})
+	if !errors.As(err, &apiErr) || apiErr.Code != CodeInvalidRequest || apiErr.Status != 408 || apiErr.RetryAction != ActionNone || apiErr.Detail.Reason != ReasonDeadlineExceeded || apiErr.Detail.Header != HeaderDeadline {
+		t.Fatalf("expired deadline from Serve: %v", err)
+	}
+	if adv := Advice(apiErr); adv.Action != ActionNone || adv.Replayable {
+		t.Fatalf("deadline is never auto-retried: %+v", adv)
+	}
+	f.expireDeadlines = false
+	// a replay that cannot start before the deadline is refused without sleeping
+	busy := &APIError{Code: CodeCapacityExceeded, Status: 503, RetryAction: ActionSameRequest, RetryAfter: time.Second, HasRetryAfter: true}
+	_, err = RetrySameRequest(ctx, c, busy, SameRequest{Operation: OpArchiveBindingClose, Options: CallOptions{Params: params, Body: closeBody, IdempotencyKey: "k-9", Deadline: clock.Add(500 * time.Millisecond)}},
+		RetryOptions{Sleep: func(context.Context, time.Duration) error { t.Fatal("must not sleep past the deadline"); return nil }})
+	if !errors.As(err, &cerr) || cerr.Code != CodeDeadlineExceeded {
+		t.Fatalf("replay past deadline: %v", err)
+	}
+	slept := time.Duration(0)
+	replayed, err := RetrySameRequest(ctx, c, busy, SameRequest{Operation: OpArchiveBindingClose, Options: CallOptions{Params: params, Body: closeBody, IdempotencyKey: "k-9", Deadline: clock.Add(2 * time.Second)}},
+		RetryOptions{Sleep: func(_ context.Context, d time.Duration) error { slept = d; return nil }})
+	if err != nil || replayed.Status != 200 || slept != time.Second {
+		t.Fatalf("replay within deadline: %v %v", err, slept)
+	}
+
+	// --- what went on the wire: the heads as sent are a valid RequestHeaders projection ---
+	for _, r := range f.requests() {
+		if !strings.HasSuffix(r.URL.Path, "/close") {
+			continue
+		}
+		projection := map[string]any{}
+		for _, name := range []string{HeaderIdempotencyKey, HeaderIfMatch, HeaderDeadline, HeaderSessionFamily, HeaderClosureID} {
+			if v := r.Header.Get(name); v != "" {
+				projection[name] = v
+			}
+		}
+		if err := Validate(DefRequestHeaders, projection); err != nil {
+			t.Fatalf("request headers %v: %v", projection, err)
+		}
+		if v := r.Header.Get(HeaderIfMatch); v != "" && !strongETagRule.MatchString(v) {
+			t.Fatalf("If-Match left in a non-strong form: %q", v)
+		}
 	}
 }
 
