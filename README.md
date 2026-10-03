@@ -3,7 +3,7 @@
 tansr 统一 `/api` 合同(RFC-UAPI-1,`unified-v1`)的 Go SDK。
 Go SDK for the tansr unified `/api` contract (RFC-UAPI-1, `unified-v1`).
 
-**状态 / Status:骨架(skeleton,UAPI-01 阶段四 U4-GO;V-GO 验收对齐 manifest revision 6 与 D18 七键事件包络,2026-10-01)。** 标准库实现,零第三方依赖;`api` / `canonical` / `sse` 有实现与测试,`executor` / `archive` 仅接口定义;真实 Serve 联调待主线。
+**状态 / Status:骨架(skeleton,UAPI-01 阶段四 U4-GO;U8-GO 对齐 manifest revision 7、三头接线与 D19 统一码异常模型,165 向量金样回放,2026-10-03)。** 标准库实现,零第三方依赖;`api` / `canonical` / `sse` 有实现与测试,`executor` / `archive` 仅接口定义;真实 Serve 联调待主线。
 Standard library only, zero third-party dependencies; `api` / `canonical` / `sse` are implemented and tested, `executor` / `archive` are interface definitions only; validation against a real Serve is pending on the mainline.
 
 ```
@@ -45,6 +45,34 @@ res, err := client.Call(ctx, api.OpSessionMessageSend, api.CallOptions{
 })
 stream, err := client.Events(ctx, api.OpSessionEventsObserve, api.EventsOptions{Params: map[string]string{"id": sessionID}})
 ```
+
+### 三头 / Three request heads(manifest r7,U7-HDR)
+
+```go
+read, _ := client.Call(ctx, api.OpArchiveBindingGet, api.CallOptions{Params: p})          // read.Meta.ETag = "\"3\""
+_, err = client.Call(ctx, api.OpArchiveBindingClose, api.CallOptions{
+    Params: p, Body: body,
+    IdempotencyKey: "close-7",      // Serve 按键返回同一回执;RetrySameRequest 以同键重放一次
+    IfMatch:        read.Meta.ETag, // 仅 Operation.AcceptsIfMatch 的写操作;陈旧 → 412 precondition_failed / refresh
+    Deadline:       time.Now().Add(30 * time.Second), // 过期即拒(本地 CodeDeadlineExceeded / 服务端 408),SDK 永不延长
+})
+```
+
+### 错误 / Errors(D19:统一码为主)
+
+```go
+var apiErr *api.APIError
+if errors.As(err, &apiErr) {
+    switch apiErr.Code {                    // 19 统一码(api.Code*),RetryAction 6 动作(api.Action*)
+    case api.CodeCapabilityUnavailable:     // apiErr.Detail.Reason: not_installed | outside_closure
+    case api.CodePreconditionFailed:        // apiErr.Detail.Reason: if_match_stale;apiErr.Detail.DomainCode: 族码(次级)
+    }
+}
+errors.Is(err, &api.APIError{Code: api.CodeNotFound}) // 只按统一码匹配
+advice := api.Advice(err)                            // RetryAdvice.Action api.RetryAction
+```
+
+旧字段 → 新字段对照见 `CHANGELOG.md`。`*api.DomainError`(未包装的族原信封,今日仅 `archive-sync-v1`)与 `*api.ClientError` / `*api.ContractUnavailableError` 边界不变。
 
 ## 验证 / Verification
 

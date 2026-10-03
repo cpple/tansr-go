@@ -20,4 +20,15 @@
 //  6. The five cursors are not interchangeable: EventCursor, ArchiveCoverage, OutputWatermark,
 //     MaterialConsumed and AckReceipt are distinct types; nothing here synthesises or advances them.
 //  7. No hand-written legacy prefixes: the only path material is the manifest table.
+//
+// Errors (plan D19): *APIError carries the unified code (ErrorCode, 19 values) and RetryAction as its
+// primary fields; the family's own code is secondary, in Detail.DomainCode. errors.Is against
+// &APIError{Code: …} matches on the unified code only. *DomainError remains for unwrapped family
+// envelopes (archive-sync-v1 today); *ClientError is local; *ContractUnavailableError is "not a
+// unified-v1 Serve".
+//
+// Request heads (manifest r7): CallOptions.IdempotencyKey, IfMatch (from Meta.ETag of a prior read;
+// only operations with Operation.AcceptsIfMatch) and Deadline (RFC 3339 UTC; expired → refused, never
+// extended). Serve answers 409 conflict / idempotency_key_reused, 412 precondition_failed / refresh /
+// if_match_stale and 408 invalid_request / deadline_exceeded; none of them is retried automatically.
 package api
