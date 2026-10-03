@@ -23,22 +23,39 @@ type Manifest struct {
 	Contract   string      `json:"contract"`
 	Revision   int         `json:"revision"`
 	SchemaHash string      `json:"schemaHash"`
+	Families   []Family    `json:"families"`
 	Operations []Operation `json:"operations"`
+}
+
+// Family is the subset of one manifest families[] entry the generator reads (revision 7: the
+// family's body position of the client idempotency key, null when the family has none).
+type Family struct {
+	ID            string   `json:"id"`
+	RequestIDPath []string `json:"requestIdPath"`
+}
+
+// ExpectedRevision is the revision-7 If-Match mapping target of a write operation: the body key path
+// of expectedRevision and its value kind (sequence = decimal string, integer = non-negative integer).
+type ExpectedRevision struct {
+	Path []string `json:"path"`
+	Kind string   `json:"kind"`
 }
 
 // Operation is one manifest operations[] entry.
 type Operation struct {
-	Name     string   `json:"name"`
-	Domain   string   `json:"domain"`
-	Family   *string  `json:"family"`
-	Method   string   `json:"method"`
-	APIPath  string   `json:"apiPath"`
-	Aliases  []string `json:"aliases"`
-	Kind     string   `json:"kind"`
-	SSE      bool     `json:"sse"`
-	Query    []string `json:"query"`
-	Request  *string  `json:"request"`
-	Response *string  `json:"response"`
+	Name             string            `json:"name"`
+	Domain           string            `json:"domain"`
+	Family           *string           `json:"family"`
+	Method           string            `json:"method"`
+	APIPath          string            `json:"apiPath"`
+	Aliases          []string          `json:"aliases"`
+	Kind             string            `json:"kind"`
+	SSE              bool              `json:"sse"`
+	Query            []string          `json:"query"`
+	Request          *string           `json:"request"`
+	Response         *string           `json:"response"`
+	ETagPath         []string          `json:"etagPath"`
+	ExpectedRevision *ExpectedRevision `json:"expectedRevision"`
 }
 
 // Render parses the manifest bytes and returns the formatted Go source of package api's operation table.
@@ -122,6 +139,33 @@ func render(m *Manifest, sourceSHA256 string) ([]byte, error) {
 			familySeen[*op.Family] = true
 			families = append(families, *op.Family)
 		}
+		// revision 7 three-header facts: a key path is never empty; expectedRevision only on writes.
+		if op.ETagPath != nil && len(op.ETagPath) == 0 {
+			return nil, fmt.Errorf("%s: etagPath must be null or a non-empty key path", op.Name)
+		}
+		if op.ExpectedRevision != nil {
+			if op.Kind != "write" {
+				return nil, fmt.Errorf("%s: expectedRevision is only allowed on write operations", op.Name)
+			}
+			if len(op.ExpectedRevision.Path) == 0 || (op.ExpectedRevision.Kind != "sequence" && op.ExpectedRevision.Kind != "integer") {
+				return nil, fmt.Errorf("%s: expectedRevision must have a non-empty path and kind sequence|integer", op.Name)
+			}
+		}
+	}
+	familyIDs := map[string]bool{}
+	for _, fam := range m.Families {
+		if familyIDs[fam.ID] {
+			return nil, fmt.Errorf("duplicate family %q", fam.ID)
+		}
+		familyIDs[fam.ID] = true
+		if fam.RequestIDPath != nil && len(fam.RequestIDPath) == 0 {
+			return nil, fmt.Errorf("family %s: requestIdPath must be null or a non-empty key path", fam.ID)
+		}
+	}
+	for _, family := range families {
+		if !familyIDs[family] {
+			return nil, fmt.Errorf("family %q is used by an operation but not registered in families[]", family)
+		}
 	}
 
 	var b bytes.Buffer
@@ -137,6 +181,12 @@ func render(m *Manifest, sourceSHA256 string) ([]byte, error) {
 	fmt.Fprintf(&b, "var Domains = %s\n\n", quoteList(domains))
 	b.WriteString("// Families is the contract-family vocabulary (facade operations have no family and are not listed).\n")
 	fmt.Fprintf(&b, "var Families = %s\n\n", quoteList(families))
+	b.WriteString("// FamilyRequestIDPaths is the body key path of the client idempotency key per registered family\n// (manifest families[].requestIdPath, revision 7): the position Idempotency-Key is mapped to by the server;\n// nil = the family's body has no such position (deduplication by request fingerprint only).\n")
+	b.WriteString("var FamilyRequestIDPaths = map[string][]string{\n")
+	for _, fam := range m.Families {
+		fmt.Fprintf(&b, "\t%q: %s,\n", fam.ID, quoteList(fam.RequestIDPath))
+	}
+	b.WriteString("}\n\n")
 
 	b.WriteString("// Operation names.\nconst (\n")
 	for _, op := range m.Operations {
@@ -158,8 +208,12 @@ func render(m *Manifest, sourceSHA256 string) ([]byte, error) {
 		if op.Response != nil {
 			response = fmt.Sprintf("%q", *op.Response)
 		}
-		fmt.Fprintf(&b, "\t{Name: %s, Method: %q, Path: %q, Params: %s, Aliases: %s, Domain: %q, Family: %s, Kind: %q, SSE: %v, Query: %s, Request: %s, Response: %s},\n",
-			ConstName(op.Name), op.Method, op.APIPath, quoteList(TemplateParams(op.APIPath)), quoteList(op.Aliases), op.Domain, family, op.Kind, op.SSE, quoteList(op.Query), request, response)
+		expected := "nil"
+		if op.ExpectedRevision != nil {
+			expected = fmt.Sprintf("&ExpectedRevision{Path: %s, Kind: %q}", quoteList(op.ExpectedRevision.Path), op.ExpectedRevision.Kind)
+		}
+		fmt.Fprintf(&b, "\t{Name: %s, Method: %q, Path: %q, Params: %s, Aliases: %s, Domain: %q, Family: %s, Kind: %q, SSE: %v, Query: %s, Request: %s, Response: %s, ETagPath: %s, ExpectedRevision: %s},\n",
+			ConstName(op.Name), op.Method, op.APIPath, quoteList(TemplateParams(op.APIPath)), quoteList(op.Aliases), op.Domain, family, op.Kind, op.SSE, quoteList(op.Query), request, response, quoteList(op.ETagPath), expected)
 	}
 	b.WriteString("}\n")
 	return format.Source(b.Bytes())

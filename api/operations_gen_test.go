@@ -7,6 +7,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cpple/tansr-go/internal/manifestgen"
@@ -42,10 +43,45 @@ func TestOperationsGenerated(t *testing.T) {
 	if hex.EncodeToString(sum[:]) != ManifestSourceSHA256 {
 		t.Fatalf("ManifestSourceSHA256 %s differs from manifest file %s", ManifestSourceSHA256, hex.EncodeToString(sum[:]))
 	}
-	if len(operations) != 80 {
-		t.Fatalf("expected 80 operations, got %d", len(operations))
+	if len(operations) != 81 {
+		t.Fatalf("expected 81 operations, got %d", len(operations))
 	}
-	if len(ClosureOperationNames()) != 76 {
-		t.Fatalf("expected 76 closure operations, got %d", len(ClosureOperationNames()))
+	if len(ClosureOperationNames()) != 77 {
+		t.Fatalf("expected 77 closure operations, got %d", len(ClosureOperationNames()))
+	}
+	// revision 7 three-header facts are carried verbatim (U7-HDR §3 inventory): 15 versioned operations
+	// (archive 6 / cache 6 / terminal 3 carry an ETag), 9 write operations accept If-Match (archive 3 /
+	// cache 4 / terminal 2, of which terminal.configuration.commit is the only integer kind), 11 families.
+	versioned, ifMatch := 0, 0
+	for _, op := range operations {
+		if op.Versioned() {
+			versioned++
+		}
+		if op.AcceptsIfMatch() {
+			ifMatch++
+			if op.Kind != "write" {
+				t.Fatalf("%s: expectedRevision on a %s operation", op.Name, op.Kind)
+			}
+		}
+	}
+	if versioned != 15 || ifMatch != 9 {
+		t.Fatalf("three-header facts: %d versioned / %d if-match operations", versioned, ifMatch)
+	}
+	if len(FamilyRequestIDPaths) != 11 {
+		t.Fatalf("expected 11 registered families, got %d", len(FamilyRequestIDPaths))
+	}
+	approval, ok := Lookup(OpApprovalCredentialSubmit)
+	if !ok || approval.Method != "POST" || approval.Path != "/api/approvals/:id/credential" || approval.Kind != "write" || approval.Family != "agent-session-v1" {
+		t.Fatalf("approval.credential.submit: %+v", approval)
+	}
+	commit, _ := Lookup(OpTerminalConfigurationCommit)
+	if commit.ExpectedRevision == nil || commit.ExpectedRevision.Kind != "integer" || strings.Join(commit.ETagPath, ".") != "configuration.revision" {
+		t.Fatalf("terminal.configuration.commit facts: %+v", commit)
+	}
+	if p := mustOp(t, OpArchiveAckCommit).RequestIDPath(); strings.Join(p, ".") != "request.requestId" {
+		t.Fatalf("sdk2-ext-v1 requestIdPath: %v", p)
+	}
+	if p := approval.RequestIDPath(); p != nil {
+		t.Fatalf("agent-session-v1 has no requestIdPath, got %v", p)
 	}
 }

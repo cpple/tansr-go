@@ -188,13 +188,13 @@ type pathError string
 func (e pathError) Error() string { return "path segment not found: " + string(e) }
 func errPath(key string) error    { return pathError(key) }
 
-// goldenCounts locks the vendored golden (doc/rfc/unified-v1.golden.json, sha256 7c6baad1…): 161 vectors,
-// 40 valid / 121 invalid, of which EventEnvelope has 7 valid / 18 invalid (D18 seven-key wire form).
-// Re-vendoring a new golden must update these numbers together with contract/PROVENANCE.json.
+// goldenCounts locks the vendored golden (doc/rfc/unified-v1.golden.json, sha256 42531a39…, revision 7):
+// 165 vectors, 41 valid / 124 invalid, of which EventEnvelope has 7 valid / 18 invalid (D18 seven-key
+// wire form). Re-vendoring a new golden must update these numbers together with contract/PROVENANCE.json.
 const (
-	goldenTotal           = 161
-	goldenValid           = 40
-	goldenInvalid         = 121
+	goldenTotal           = 165
+	goldenValid           = 41
+	goldenInvalid         = 124
 	goldenEnvelopeValid   = 7
 	goldenEnvelopeInvalid = 18
 )
@@ -214,6 +214,13 @@ var goldenNamed = []string{
 	"event-envelope-event-id-missing",
 	"event-envelope-raw-null",
 	"event-envelope-archive-coverage-partial",
+	// revision 7: three-header envelopes and manifest three-header facts
+	"unified-error-if-match-conflict",
+	"unified-error-deadline-expired",
+	"unified-error-idempotency-key-reused",
+	"manifest-operation-read-with-expected-revision",
+	"manifest-operation-etag-path-empty",
+	"manifest-family-request-id-path-string",
 }
 
 // TestGoldenVectors validates every unified-v1 golden vector: positives must pass, negatives must fail;
@@ -302,7 +309,7 @@ func assertTyped(t *testing.T, definition string, value any) {
 	case DefCapabilityClosure:
 		var c CapabilityClosure
 		strict(&c)
-		if len(c.Operations) != 76 || len(c.Domains) != 8 {
+		if len(c.Operations) != 77 || len(c.Domains) != 8 {
 			t.Fatalf("closure decoded %d operations / %d domains", len(c.Operations), len(c.Domains))
 		}
 	case DefFacadeError, DefUnifiedError:

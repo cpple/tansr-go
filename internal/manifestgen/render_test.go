@@ -21,9 +21,19 @@ func TestRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, want := range []string{"package api", "const ManifestRevision = 6", `Path: "/api/sessions/:id/tool-results/:targetId", Params: []string{"id", "targetId"}`} {
+	for _, want := range []string{
+		"package api", "const ManifestRevision = 7",
+		`Path: "/api/sessions/:id/tool-results/:targetId", Params: []string{"id", "targetId"}`,
+		`OpApprovalCredentialSubmit, Method: "POST", Path: "/api/approvals/:id/credential"`,
+		`ETagPath: []string{"configuration", "revision"}, ExpectedRevision: &ExpectedRevision{Path: []string{"expectedRevision"}, Kind: "integer"}`,
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("rendered source lacks %q", want)
+		}
+	}
+	for _, want := range []string{`"sdk2-ext-v1":\s+\[\]string\{"request", "requestId"\}`, `"agent-session-v1":\s+nil`, `"terminal-services-v1":\s+\[\]string\{"requestId"\}`} {
+		if !regexp.MustCompile(want).MatchString(text) {
+			t.Fatalf("rendered FamilyRequestIDPaths lacks %s", want)
 		}
 	}
 	if !regexp.MustCompile(`OpDiscoveryManifest\s+= "discovery\.manifest"`).MatchString(text) {
@@ -69,5 +79,23 @@ func TestRenderRejectsInconsistentManifest(t *testing.T) {
 	}
 	if _, err := Render([]byte(`{"format":"other"}`)); err == nil {
 		t.Fatal("unknown format must be rejected")
+	}
+	// revision 7 facts: expectedRevision on a read, empty key paths and unregistered families are rejected
+	families := `"families":[{"id":"f","requestIdPath":["requestId"]}]`
+	bad = `{"format":"tansr-api-manifest-v1","contract":"unified-v1","revision":1,"schemaHash":"x",` + families + `,"operations":[{"name":"a.b","domain":"session","family":"f","method":"GET","apiPath":"/api/x","aliases":[],"kind":"read","sse":false,"query":[],"etagPath":null,"expectedRevision":{"path":["expectedRevision"],"kind":"sequence"}}]}`
+	if _, err := Render([]byte(bad)); err == nil {
+		t.Fatal("expectedRevision on a read operation must be rejected")
+	}
+	bad = `{"format":"tansr-api-manifest-v1","contract":"unified-v1","revision":1,"schemaHash":"x",` + families + `,"operations":[{"name":"a.b","domain":"session","family":"f","method":"GET","apiPath":"/api/x","aliases":[],"kind":"read","sse":false,"query":[],"etagPath":[],"expectedRevision":null}]}`
+	if _, err := Render([]byte(bad)); err == nil {
+		t.Fatal("empty etagPath must be rejected")
+	}
+	bad = `{"format":"tansr-api-manifest-v1","contract":"unified-v1","revision":1,"schemaHash":"x","families":[],"operations":[{"name":"a.b","domain":"session","family":"f","method":"GET","apiPath":"/api/x","aliases":[],"kind":"read","sse":false,"query":[],"etagPath":null,"expectedRevision":null}]}`
+	if _, err := Render([]byte(bad)); err == nil {
+		t.Fatal("operation family missing from families[] must be rejected")
+	}
+	good := `{"format":"tansr-api-manifest-v1","contract":"unified-v1","revision":1,"schemaHash":"x",` + families + `,"operations":[{"name":"a.b","domain":"session","family":"f","method":"POST","apiPath":"/api/x","aliases":[],"kind":"write","sse":false,"query":[],"etagPath":["revision"],"expectedRevision":{"path":["expectedRevision"],"kind":"sequence"}}]}`
+	if _, err := Render([]byte(good)); err != nil {
+		t.Fatalf("minimal revision-7 manifest must render: %v", err)
 	}
 }

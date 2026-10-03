@@ -150,7 +150,8 @@ var (
 	operationNamePattern   = regexp.MustCompile(`^[a-z]+(\.[a-z][a-z0-9]*)+$`)
 	apiPathPattern         = regexp.MustCompile(`^/api(/(:[A-Za-z]+|[A-Za-z0-9._~-]+))+$`)
 	apiEntryPattern        = regexp.MustCompile(`^/api(/(:[A-Za-z]+|[A-Za-z0-9._~-]+|\*\*))*$`)
-	legacyPathPattern      = regexp.MustCompile(`^/v[23](/(:[A-Za-z]+|[A-Za-z0-9._~-]+|\*\*))+$`)
+	legacyPathPattern      = regexp.MustCompile(`^/v[123](/(:[A-Za-z]+|[A-Za-z0-9._~-]+|\*\*))+$`)
+	keyPathSegmentPattern  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 	legacyOffloadPattern   = regexp.MustCompile(`^/v3/sdk2/`)
 	schemaRefPattern       = regexp.MustCompile(`^[a-z0-9-]+#[A-Za-z][A-Za-z0-9]*$`)
 	eventTypePattern       = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`)
@@ -191,10 +192,22 @@ var (
 	operationStates   = []string{"enabled", "disabled", "unavailable"}
 	terminalStatuses  = []string{"accepted", "completed", "aborted", "unknown"}
 	fallbackEnum      = []string{"none", "legacy-cold"}
-	reasonEnum        = []string{"not_installed", "outside_closure"}
-	facadeHeaderEnum  = []string{"tansr-session-family", "tansr-closure-id", "tansr-event-envelope"}
-	httpStatusEnum    = []int64{400, 401, 403, 404, 405, 408, 409, 410, 412, 413, 422, 429, 500, 503}
-	facadeStatusEnum  = []int64{400, 401, 403, 404, 405, 412, 503}
+	// facadeReasonEnum is FacadeErrorDetail.reason (fence and assembly only).
+	facadeReasonEnum = []string{"not_installed", "outside_closure"}
+	// reasonEnum is UnifiedErrorDetail.reason: fence / assembly plus the 15 request-header reasons of the
+	// /api three-header wiring (revision 7; RFC-UAPI-1 §1.2, plan D27: no new codes, reasons only).
+	reasonEnum = []string{
+		"not_installed", "outside_closure",
+		"idempotency_key_invalid", "idempotency_key_not_applicable", "idempotency_key_reused", "idempotency_key_mismatch",
+		"receipt_not_retained", "receipt_window_full",
+		"if_match_invalid", "if_match_not_applicable", "if_match_body_mismatch", "if_match_stale",
+		"deadline_invalid", "deadline_exceeded",
+		"header_body_limit", "header_body_not_canonical", "header_processing_failed",
+	}
+	expectedRevisionKinds = []string{"sequence", "integer"}
+	facadeHeaderEnum      = []string{"tansr-session-family", "tansr-closure-id", "tansr-event-envelope"}
+	httpStatusEnum        = []int64{400, 401, 403, 404, 405, 408, 409, 410, 412, 413, 422, 429, 500, 503}
+	facadeStatusEnum      = []int64{400, 401, 403, 404, 405, 412, 503}
 )
 
 // Domain contracts of the deployment-level capabilities view (route-table API_DOMAIN_FAMILY).
@@ -235,7 +248,7 @@ var unifiedStatusBindings = map[string][]int64{
 // unifiedRetryBindings: code → allowed retryActions where the schema restricts them.
 var unifiedRetryBindings = map[string][]string{
 	"result_unknown":      {"query-status", "rebind"},
-	"precondition_failed": {"rediscover"},
+	"precondition_failed": {"rediscover", "refresh"},
 	"not_canonical":       {"none"},
 }
 
@@ -382,6 +395,31 @@ func (c *checker) stringArray(v any, path string, pattern *regexp.Regexp, min, m
 	return out, nil
 }
 
+// keyPath validates schema KeyPath: 1–8 object keys from the root, each `^[A-Za-z][A-Za-z0-9]*$` (≤ 64).
+func (c *checker) keyPath(v any, path string) *ValidationError {
+	list, err := c.array(v, path, 1)
+	if err != nil {
+		return err
+	}
+	if len(list) > 8 {
+		return c.fail(path, "must have at most 8 items")
+	}
+	for i, item := range list {
+		if _, err := c.str(item, index(path, i), keyPathSegmentPattern, 1, 64); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// keyPathOrNull validates KeyPath | null.
+func (c *checker) keyPathOrNull(v any, path string) *ValidationError {
+	if v == nil {
+		return nil
+	}
+	return c.keyPath(v, path)
+}
+
 func (c *checker) enumArray(v any, path string, values []string, minItems, maxItems int, unique bool) *ValidationError {
 	list, err := c.array(v, path, minItems)
 	if err != nil {
@@ -489,11 +527,14 @@ func (c *checker) manifestFamily(v any, path string) *ValidationError {
 	if err != nil {
 		return err
 	}
-	required := []string{"id", "domains", "status", "rfc", "source", "sha256", "golden", "generated", "legacyEntries", "apiEntries", "clients"}
+	required := []string{"id", "domains", "status", "rfc", "source", "sha256", "golden", "generated", "legacyEntries", "apiEntries", "clients", "requestIdPath"}
 	if err := c.require(m, path, required...); err != nil {
 		return err
 	}
 	if err := c.noExtra(m, path, append(required, "sessionManifestRevision", "sessionManifestSha256")...); err != nil {
+		return err
+	}
+	if err := c.keyPathOrNull(m["requestIdPath"], child(path, "requestIdPath")); err != nil {
 		return err
 	}
 	if _, err := c.str(m["id"], child(path, "id"), familyIDPattern, 1, 64); err != nil {
@@ -592,7 +633,7 @@ func (c *checker) manifestOperation(v any, path string) *ValidationError {
 	if err != nil {
 		return err
 	}
-	required := []string{"name", "domain", "family", "method", "apiPath", "aliases", "legacyPath", "legacyOffloadPath", "kind", "sse", "request", "response", "query", "notes"}
+	required := []string{"name", "domain", "family", "method", "apiPath", "aliases", "legacyPath", "legacyOffloadPath", "kind", "sse", "request", "response", "query", "notes", "etagPath", "expectedRevision"}
 	if err := c.require(m, path, required...); err != nil {
 		return err
 	}
@@ -643,6 +684,33 @@ func (c *checker) manifestOperation(v any, path string) *ValidationError {
 	}
 	if err := c.strOrNull(m["notes"], child(path, "notes"), nil, 1, 2048); err != nil {
 		return err
+	}
+	// revision 7 three-header facts: etagPath KeyPath | null; expectedRevision {path, kind} | null, and
+	// null whenever the operation is not a write (If-Match applies to writes only).
+	if err := c.keyPathOrNull(m["etagPath"], child(path, "etagPath")); err != nil {
+		return err
+	}
+	if exp := m["expectedRevision"]; exp != nil {
+		epath := child(path, "expectedRevision")
+		em, err := c.object(exp, epath)
+		if err != nil {
+			return err
+		}
+		if err := c.require(em, epath, "path", "kind"); err != nil {
+			return err
+		}
+		if err := c.noExtra(em, epath, "path", "kind"); err != nil {
+			return err
+		}
+		if err := c.keyPath(em["path"], child(epath, "path")); err != nil {
+			return err
+		}
+		if _, err := c.enum(em["kind"], child(epath, "kind"), expectedRevisionKinds); err != nil {
+			return err
+		}
+		if kind != "write" {
+			return c.fail(epath, "must be null for %s operations (If-Match applies to writes only)", kind)
+		}
 	}
 	if domain == "discovery" {
 		for _, key := range []string{"family", "legacyPath", "legacyOffloadPath"} {
@@ -999,7 +1067,7 @@ func (c *checker) facadeError(v any, path string) *ValidationError {
 			return err
 		}
 		if reason, ok := detail["reason"]; ok {
-			if _, err := c.enum(reason, child(dpath, "reason"), reasonEnum); err != nil {
+			if _, err := c.enum(reason, child(dpath, "reason"), facadeReasonEnum); err != nil {
 				return err
 			}
 		}
@@ -1154,6 +1222,11 @@ func (c *checker) unifiedError(v any, path string) *ValidationError {
 		}
 		if header, ok := detail["header"]; ok {
 			if _, err := c.str(header, child(dpath, "header"), headerNamePattern, 0, 64); err != nil {
+				return err
+			}
+		}
+		if lb, ok := detail["limitBytes"]; ok {
+			if _, err := c.integer(lb, child(dpath, "limitBytes"), 1, 1<<53); err != nil {
 				return err
 			}
 		}

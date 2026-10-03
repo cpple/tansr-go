@@ -43,19 +43,21 @@ type InstalledDomains struct {
 
 // ManifestFamily is one contract-family registration (schema ManifestFamily).
 type ManifestFamily struct {
-	ID                      string            `json:"id"`
-	Domains                 []string          `json:"domains"`
-	Status                  string            `json:"status"`
-	RFC                     string            `json:"rfc"`
-	Source                  string            `json:"source"`
-	SHA256                  string            `json:"sha256"`
-	Golden                  map[string]string `json:"golden"`
-	Generated               []string          `json:"generated"`
-	LegacyEntries           []string          `json:"legacyEntries"`
-	APIEntries              []string          `json:"apiEntries"`
-	Clients                 []ClientLock      `json:"clients"`
-	SessionManifestRevision *int              `json:"sessionManifestRevision,omitempty"`
-	SessionManifestSHA256   *string           `json:"sessionManifestSha256,omitempty"`
+	ID            string            `json:"id"`
+	Domains       []string          `json:"domains"`
+	Status        string            `json:"status"`
+	RFC           string            `json:"rfc"`
+	Source        string            `json:"source"`
+	SHA256        string            `json:"sha256"`
+	Golden        map[string]string `json:"golden"`
+	Generated     []string          `json:"generated"`
+	LegacyEntries []string          `json:"legacyEntries"`
+	APIEntries    []string          `json:"apiEntries"`
+	Clients       []ClientLock      `json:"clients"`
+	// RequestIDPath is the body key path of the client idempotency key (revision 7); nil = none.
+	RequestIDPath           []string `json:"requestIdPath"`
+	SessionManifestRevision *int     `json:"sessionManifestRevision,omitempty"`
+	SessionManifestSHA256   *string  `json:"sessionManifestSha256,omitempty"`
 }
 
 // ClientLock is one client registration of a family (schema ClientLock).
@@ -84,6 +86,15 @@ type ManifestOperation struct {
 	Response          *string  `json:"response"`
 	Query             []string `json:"query"`
 	Notes             *string  `json:"notes"`
+	// ETagPath / ExpectedRevision are the revision-7 three-header facts (see Operation).
+	ETagPath         []string                  `json:"etagPath"`
+	ExpectedRevision *ManifestExpectedRevision `json:"expectedRevision"`
+}
+
+// ManifestExpectedRevision is the If-Match mapping target as published in the manifest.
+type ManifestExpectedRevision struct {
+	Path []string `json:"path"`
+	Kind string   `json:"kind"`
 }
 
 // ManifestCapability is one derived capability (schema ManifestCapability). Value is a LimitRange
@@ -177,7 +188,7 @@ type CapabilityClosure struct {
 	AuthorizationRevision *string `json:"authorizationRevision"`
 	// Domains maps the eight closure domains to their state.
 	Domains map[string]ClosureDomainState `json:"domains"`
-	// Operations maps all 76 closure operation names to enabled | disabled | unavailable.
+	// Operations maps all 77 closure operation names to enabled | disabled | unavailable.
 	Operations map[string]string `json:"operations"`
 }
 

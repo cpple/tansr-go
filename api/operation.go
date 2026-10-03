@@ -34,10 +34,35 @@ type Operation struct {
 	// Request / Response are the manifest schema references (<family>#<Definition>) or "".
 	Request  string
 	Response string
+	// ETagPath is the key path of the resource revision inside 2xx JSON responses from which the
+	// server derives the strong validator `ETag: "<revision>"` (manifest etagPath, revision 7); nil =
+	// the response is not a versioned resource representation and no ETag is sent.
+	ETagPath []string
+	// ExpectedRevision is the If-Match mapping target of a write operation (manifest expectedRevision,
+	// revision 7); nil = the operation does not accept If-Match (the server answers 400
+	// if_match_not_applicable, the client refuses locally).
+	ExpectedRevision *ExpectedRevision
+}
+
+// ExpectedRevision is the body position the server maps If-Match to: Path is the key path of
+// expectedRevision, Kind is sequence (decimal string) or integer (non-negative safe integer).
+type ExpectedRevision struct {
+	Path []string
+	Kind string
 }
 
 // IsFacade reports whether the operation is answered by the facade itself (no family).
 func (op Operation) IsFacade() bool { return op.Family == "" }
+
+// Versioned reports whether 2xx responses of the operation carry an ETag (ETagPath != nil).
+func (op Operation) Versioned() bool { return op.ETagPath != nil }
+
+// AcceptsIfMatch reports whether the operation accepts an If-Match precondition (ExpectedRevision != nil).
+func (op Operation) AcceptsIfMatch() bool { return op.ExpectedRevision != nil }
+
+// RequestIDPath returns the body key path of the client idempotency key for the operation's family
+// (manifest families[].requestIdPath); nil for facade operations and families without a position.
+func (op Operation) RequestIDPath() []string { return FamilyRequestIDPaths[op.Family] }
 
 var operationIndex = func() map[string]*Operation {
 	index := make(map[string]*Operation, len(operations))
@@ -60,7 +85,7 @@ func Operations() []Operation {
 	return out
 }
 
-// ClosureOperationNames returns the 76 operation names that appear in a capability closure: the
+// ClosureOperationNames returns the 77 operation names that appear in a capability closure: the
 // catalogue without the deployment-level discovery reads (domain discovery and session.capabilities).
 func ClosureOperationNames() []string {
 	var names []string
