@@ -1,7 +1,13 @@
 # tansr-go 协作入口
 
-本仓是 tansr 统一 `/api` 合同的 Go SDK(UAPI-01 阶段四 U4-GO 骨架)。执行任务前读取 tansr-cli 仓的
+本仓是 tansr 统一 `/api` 合同的 Go SDK。UAPI 骨架已完成，GO-01 在其基础上实现高层 SDK 与 Demo。执行任务前读取 tansr-cli 仓的
 `doc/工程工作纪律.md`、`doc/90-SDK技术手册.md` 第 16 章(§16.6 七条纪律)与 RFC-UAPI-1。
+
+## SDK2 / UAPI 冻结基线
+
+先读 `doc/GO-01-SDK2与UAPI合同冻结-2026-10-07.md` 与本轮 `doc/GO-01-Go-SDK与Demo开发及验收.md`。
+`contract/LOCK.json` 锁定 CLI `83c64b2c` 的 39 份合同/语义/参考文件；SDK 实现不准顺带改 schema、金样、操作目录或冻结字节。
+执行 `go run ./internal/gen/contractcheck` 校验本地锁，跨仓对照增加 `-source J:/tansr/tansr-cli`。新合同须先提修订和会签，再显式更新基线，不自动跟随上游 HEAD。
 
 ## 事实源(只读,路径以 tansr-cli 仓根为准)
 
@@ -34,8 +40,8 @@ go test ./internal/manifestgen -update       # 宿主拒绝启动新编译可执
 ## 门禁
 
 `gofmt -l .` 为空;`go vet ./...`;`go test ./...`(可用 CGO 时加 `-race`);
-`GOOS=linux|darwin|windows GOARCH=amd64 go build ./...`。零第三方依赖(标准库;`golang.org/x/` 不引入除非必要)。
+`GOOS=linux|darwin|windows GOARCH=amd64 go build ./...`；`go run ./internal/gen/contractcheck`；`go run ./internal/gen/manifest2go -check`。零第三方依赖(标准库;`golang.org/x/` 不引入除非必要)。
 
 ## 提交
 
-格式 `type(scope): 具体变化 (UAPI-01)`;UTF-8、LF、无 BOM(`git commit -F`)。远端由主线在收编时创建;本仓不自行添加远端、不推送。
+格式 `type(scope): 具体变化 (任务号)`，合同迁移历史使用 UAPI-01，本轮 SDK 与 Demo 使用 GO-01；UTF-8、LF、无 BOM(`git commit -F`)。不自行添加远端、不推送开发分支；远端发布仍由主线发布负责人执行。

@@ -1,0 +1,326 @@
+{
+  "toolChain": [
+    {
+      "id": "0",
+      "data": {
+        "type": "session.created",
+        "cwd": "<cwd>",
+        "sessionId": "<session>",
+        "seq": 0,
+        "ts": 0,
+        "v": "v0",
+        "source": "server"
+      }
+    },
+    {
+      "id": "1",
+      "data": {
+        "type": "turn.started",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 1,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "2",
+      "event": "server.tool.request",
+      "data": {
+        "callId": "<id-1>",
+        "name": "echo",
+        "args": {
+          "text": "hi from model"
+        },
+        "deadlineAt": 0,
+        "ttlMs": 120000,
+        "ts": 0
+      }
+    },
+    {
+      "id": "3",
+      "data": {
+        "type": "tool.started",
+        "toolCallId": "call-echo-1",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 3,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "4",
+      "data": {
+        "type": "tool.completed",
+        "toolCallId": "call-echo-1",
+        "durationMs": 0,
+        "content": "echoed: hi from model",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 4,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "5",
+      "data": {
+        "type": "turn.completed",
+        "reason": "completed",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 5,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    }
+  ],
+  "permissionChain": [
+    {
+      "id": "0",
+      "data": {
+        "type": "session.created",
+        "cwd": "<cwd>",
+        "sessionId": "<session>",
+        "seq": 0,
+        "ts": 0,
+        "v": "v0",
+        "source": "server"
+      }
+    },
+    {
+      "id": "1",
+      "data": {
+        "type": "turn.started",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 1,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "2",
+      "event": "server.permission.request",
+      "data": {
+        "requestId": "<id-1>",
+        "name": "saveNote",
+        "attribution": {
+          "decision": "ask",
+          "source": "mode"
+        },
+        "digest": "<digest>",
+        "expiresAt": 0,
+        "ttlMs": 120000,
+        "ts": 0
+      }
+    },
+    {
+      "id": "3",
+      "data": {
+        "type": "tool.permission.requested",
+        "toolCallId": "call-save-1",
+        "name": "saveNote",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 3,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "4",
+      "event": "server.permission.closed",
+      "data": {
+        "requestId": "<id-1>",
+        "ts": 0
+      }
+    },
+    {
+      "id": "5",
+      "data": {
+        "type": "tool.permission.decided",
+        "toolCallId": "call-save-1",
+        "decision": "allow",
+        "decisionSource": "user",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 5,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "6",
+      "event": "server.tool.request",
+      "data": {
+        "callId": "<id-2>",
+        "name": "saveNote",
+        "args": {
+          "note": "n1"
+        },
+        "deadlineAt": 0,
+        "ttlMs": 120000,
+        "ts": 0
+      }
+    },
+    {
+      "id": "7",
+      "data": {
+        "type": "tool.started",
+        "toolCallId": "call-save-1",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 7,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "8",
+      "data": {
+        "type": "tool.completed",
+        "toolCallId": "call-save-1",
+        "durationMs": 0,
+        "content": "saved",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 8,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "9",
+      "data": {
+        "type": "turn.completed",
+        "reason": "completed",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 9,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    }
+  ],
+  "questionChain": [
+    {
+      "id": "0",
+      "data": {
+        "type": "session.created",
+        "cwd": "<cwd>",
+        "sessionId": "<session>",
+        "seq": 0,
+        "ts": 0,
+        "v": "v0",
+        "source": "server"
+      }
+    },
+    {
+      "id": "1",
+      "data": {
+        "type": "turn.started",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 1,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "2",
+      "event": "server.question.request",
+      "data": {
+        "requestId": "<id-1>",
+        "questions": [
+          {
+            "id": "q1",
+            "prompt": "Which color?",
+            "options": [
+              {
+                "id": "red",
+                "label": "Red"
+              },
+              {
+                "id": "blue",
+                "label": "Blue"
+              }
+            ]
+          }
+        ],
+        "ts": 0
+      }
+    },
+    {
+      "id": "3",
+      "data": {
+        "type": "tool.started",
+        "toolCallId": "call-ask-1",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 3,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "4",
+      "event": "server.question.closed",
+      "data": {
+        "requestId": "<id-1>",
+        "ts": 0
+      }
+    },
+    {
+      "id": "5",
+      "data": {
+        "type": "tool.completed",
+        "toolCallId": "call-ask-1",
+        "durationMs": 0,
+        "data": {
+          "answers": [
+            {
+              "questionId": "q1",
+              "selectedOptionIds": [
+                "red"
+              ]
+            }
+          ]
+        },
+        "content": "Q: Which color? → A: Red",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 5,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    },
+    {
+      "id": "6",
+      "data": {
+        "type": "turn.completed",
+        "reason": "completed",
+        "sessionId": "<session>",
+        "turnId": "turn-e2e",
+        "seq": 6,
+        "ts": 0,
+        "v": "v0",
+        "source": "kernel"
+      }
+    }
+  ]
+}

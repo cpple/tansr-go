@@ -2,8 +2,8 @@
   "description": "tansr-go 合同对照物(只读拷贝)。事实源在 cpple/tansr(tansr-cli)仓;本目录文件不得手改,变更只经重新拷贝并更新本登记。生成器 `go run ./internal/gen/manifest2go -check` 以 api-manifest.json 为唯一输入产出 api/operations_gen.go(revision 7 起含操作 etagPath / expectedRevision 与族 requestIdPath 三头事实字段)。",
   "sourceRepo": "cpple/tansr",
   "sourceBranch": "main",
-  "sourceCommit": "64df76b24bfd3bc62850f4b04093553708b7708c",
-  "observed": "2026-10-03",
+  "sourceCommit": "83c64b2c519623a79994c942a5132300eb8174d4",
+  "observed": "2026-10-07",
   "files": {
     "api-manifest.json": {
       "source": "packages/server/contract/api-manifest.json",
@@ -32,5 +32,6 @@
       "source": "scripts/sdk2/fixtures/sdk2-wire-v1.json",
       "sha256": "d911959c91182834af396e09c523a14f223a65871588561dff5faf1d0ba27930"
     }
-  }
+  },
+  "freeze": "LOCK.json"
 }
