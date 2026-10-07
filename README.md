@@ -69,6 +69,8 @@ go run ./examples/go-chat -base http://127.0.0.1:8787 -resume SESSION_ID
 
 `go-tools` 复用已有 Serve Demo 的 `DemoOrderStatus` 声明和 `DEMO-001` 合成订单。它创建会话，注册本机 Go 执行器，完成平台初始化和会话绑定，再领取工具任务。Serve 必须安装执行扩展，并在可信应用策略中允许该执行器和该工具；初始化所报平台和工具名不能扩大应用权限。
 
+该示例还需要包含 **GO-01 首次设备绑定修复**的 Serve 源码或构建。联调发现原围栏曾要求“已有绑定”才能建立首次绑定，修复保持冻结合同不变。现有 npm 发行包不能仅凭版本号推定包含此修复；以[本轮验收和收编记录](doc/GO-01-Go-SDK与Demo开发及验收.md)核对。Go 新源码和 Serve 新源码的推送均不等于 npm 发版。
+
 ```powershell
 # 三项应来自可信登录结果 / 应用配置，并与令牌主体及当前授权代际一致。
 $env:TANSR_APPLICATION_SCOPE_ID = "YOUR_APPLICATION_SCOPE"
