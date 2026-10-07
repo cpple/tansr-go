@@ -12,7 +12,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cpple/tansr-go/api"
+	"github.com/tansrai/tansr-go/api"
 )
 
 // Client reads a short-lived user token for each request. A developer's trusted

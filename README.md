@@ -1,16 +1,16 @@
 # tansr-go
 
-Tansr Serve 的 Go SDK：终端负责接入、呈现、受控业务工具和本地档案，Serve 负责智能体循环、会话、上下文、权限与用量。统一通过 `/api` 调用，标准库实现，无第三方运行依赖。
+Tansr Serve 的 Go SDK，由 `tansrai` 维护：终端负责接入、呈现、受控业务工具和本地档案，Serve 负责智能体循环、会话、上下文、权限与用量。统一通过 `/api` 调用，标准库实现，无第三方运行依赖。Go SDK 与 Demo 采用 [MIT License](LICENSE)，许可范围见 [NOTICE](NOTICE.md)；仓库迁移和发行记录见 [GO-03](doc/GO-03-tansrai开源迁移与发布.md)。
 
 Go SDK for Tansr Serve. The client stays lightweight: Serve owns the agent loop, context and permission decisions; Go hosts presentation, explicitly installed business tools and local archive storage.
 
-**v0.2.0** 在原 `v0.1.0` UAPI 骨架上增加 `session`、实际 `executor` / `archive` 和三个 Demo。它包含 v0 次版本的源码不兼容变化，升级前请阅读 [CHANGELOG](CHANGELOG.md)。发行标签及公开消费证据见 [GO-02](doc/GO-02-三平台运行验收与公开发布.md)。
+**v0.3.0** 将 Go Modules 路径迁移为 `github.com/tansrai/tansr-go`。升级时同时更新 `go.mod` 和所有 Go 导入；旧路径与新路径是不同模块，不可混用两边的 SDK 类型。原 `v0.2.0` 已提供的 `session`、`executor` / `archive` 和三个 Demo 保持相同功能与 API 协议行为，历史标签不重打。详情见 [CHANGELOG](CHANGELOG.md)。
 
-合同以 [SDK2 / UAPI 冻结记录](doc/GO-01-SDK2与UAPI合同冻结-2026-10-07.md) 和 `contract/LOCK.json` 为准。功能范围见 [GO-01 开发及验收](doc/GO-01-Go-SDK与Demo开发及验收.md)；本批三平台运行与发行状态见 [GO-02](doc/GO-02-三平台运行验收与公开发布.md)。
+合同以 [SDK2 / UAPI 冻结记录](doc/GO-01-SDK2与UAPI合同冻结-2026-10-07.md) 和 `contract/LOCK.json` 为准。功能范围见 [GO-01 开发及验收](doc/GO-01-Go-SDK与Demo开发及验收.md)；原 `v0.2.0` 三平台运行及发行证据保留在 [GO-02](doc/GO-02-三平台运行验收与公开发布.md)，新模块的验收与公开消费结果见 [GO-03](doc/GO-03-tansrai开源迁移与发布.md)。
 
 ## 能力与边界
 
-模块为 `github.com/cpple/tansr-go`，要求 Go 1.25 或以上。
+模块为 `github.com/tansrai/tansr-go`，要求 Go 1.25 或以上。
 
 | 包 | 当前源码实现 |
 | --- | --- |
@@ -26,27 +26,27 @@ Go SDK for Tansr Serve. The client stays lightweight: Serve owns the agent loop,
 
 ## 快速开始
 
-SDK 直接通过 **Go Modules** 集成到业务项目。已有项目可以执行 `go get github.com/cpple/tansr-go@v0.2.0`，也可以在 `go.mod` 中声明固定版本：
+SDK 直接通过 **Go Modules** 集成到业务项目。已有项目可以执行 `go get github.com/tansrai/tansr-go@v0.3.0`，也可以在 `go.mod` 中声明固定版本：
 
 ```go
 module example.com/my-agent-app
 
 go 1.25
 
-require github.com/cpple/tansr-go v0.2.0
+require github.com/tansrai/tansr-go v0.3.0
 ```
 
-业务代码按需导入 `github.com/cpple/tansr-go/api`、`github.com/cpple/tansr-go/session` 等包，再运行 `go mod tidy`。提交业务项目的 `go.mod` 和生成的 `go.sum`；尚未在代码中使用的依赖会被 `tidy` 移除。SDK 安装不需要检出本仓、下载 Release 附件或使用本地 `replace`。本机 Go 应用通过 HTTP / SSE 连接单独部署的 Serve。
+业务代码按需导入 `github.com/tansrai/tansr-go/api`、`github.com/tansrai/tansr-go/session` 等包，再运行 `go mod tidy`。提交业务项目的 `go.mod` 和生成的 `go.sum`；尚未在代码中使用的依赖会被 `tidy` 移除。SDK 安装不需要检出本仓、下载 Release 附件或使用本地 `replace`。本机 Go 应用通过 HTTP / SSE 连接单独部署的 Serve。
 
-从空项目到流式会话的完整程序见 [Go 开发手册](doc/Go开发手册.md)；显式业务工具、分块输出、加密档案与 ACK 恢复见 [Go 工具与档案接入](doc/Go工具与档案接入.md)。两个手册以已发布的 **v0.2.0** 为准，API 符号索引见 [pkg.go.dev](https://pkg.go.dev/github.com/cpple/tansr-go@v0.2.0)。
+从空项目到流式会话的完整程序见 [Go 开发手册](doc/Go开发手册.md)；显式业务工具、分块输出、加密档案与 ACK 恢复见 [Go 工具与档案接入](doc/Go工具与档案接入.md)。两个手册以 **v0.3.0** 为准，API 符号索引见 [pkg.go.dev](https://pkg.go.dev/github.com/tansrai/tansr-go@v0.3.0)。
 
 三个 Demo 也可以直接安装为命令：
 
 ```sh
-go get github.com/cpple/tansr-go@v0.2.0
-go install github.com/cpple/tansr-go/examples/go-chat@v0.2.0
-go install github.com/cpple/tansr-go/examples/go-tools@v0.2.0
-go install github.com/cpple/tansr-go/examples/go-archive@v0.2.0
+go get github.com/tansrai/tansr-go@v0.3.0
+go install github.com/tansrai/tansr-go/examples/go-chat@v0.3.0
+go install github.com/tansrai/tansr-go/examples/go-tools@v0.3.0
+go install github.com/tansrai/tansr-go/examples/go-archive@v0.3.0
 ```
 
 安装的命令位于 `GOBIN`，未设置时位于 `GOPATH/bin`。以下源码示例中的 `go run ./examples/go-chat` 可替换为安装后的 `go-chat`，其他两个命令同理。
@@ -181,9 +181,11 @@ if err != nil { return err }
 
 ## Verification / English quick start
 
-Integrate directly through Go Modules: add `require github.com/cpple/tansr-go v0.2.0` to your application's `go.mod`, import the `api` / `session` packages you use, then run `go mod tidy`. Commit `go.mod` and `go.sum`. No local `replace`, source checkout or release attachment is required. The [developer guide](doc/Go开发手册.md) contains a complete streaming client; the [tools and archive guide](doc/Go工具与档案接入.md) covers durable execution, storage and ACK recovery. Both describe v0.2.0; Serve is deployed separately.
+Starting with v0.3.0, the module path is `github.com/tansrai/tansr-go`. Update both `go.mod` and all imports when migrating from `github.com/cpple/tansr-go`; the two paths define different Go types and must not be mixed. SDK behavior and the frozen API contract are unchanged. Existing v0.2.0 tags and evidence remain intact. See [GO-03](doc/GO-03-tansrai开源迁移与发布.md) for migration and publication results, and [NOTICE](NOTICE.md) for the MIT scope and upstream license boundaries.
 
-Install the SDK with `go get github.com/cpple/tansr-go@v0.2.0`, or install a demo with `go install github.com/cpple/tansr-go/examples/go-chat@v0.2.0`. Go 1.25+ is required. Set `TANSR_TOKEN_FILE` to a short-lived end-user token, then run `go-chat -base http://127.0.0.1:8787` (or `go run ./examples/go-chat` from a source checkout). Omit `-message` for interactive chat; use `-resume SESSION_ID` to continue the same session. Approval is always manual. `go-tools` demonstrates an explicitly bound read-only order lookup and requires both controller and executor operations. An executor-only host must configure `RunnerOptions.Status` using `Client.ExecutorStatus` after a controller establishes the terminal binding. `go-archive` requires a host-managed encryption key and an archive-enabled Serve; custom durable storage implements `archive.Store`. The demos do not promise all Node/Electron capabilities or silently switch session families.
+Integrate directly through Go Modules: add `require github.com/tansrai/tansr-go v0.3.0` to your application's `go.mod`, import the `api` / `session` packages you use, then run `go mod tidy`. Commit `go.mod` and `go.sum`. No local `replace`, source checkout or release attachment is required. The [developer guide](doc/Go开发手册.md) contains a complete streaming client; the [tools and archive guide](doc/Go工具与档案接入.md) covers durable execution, storage and ACK recovery. Both describe v0.3.0; Serve is deployed separately.
+
+Install the SDK with `go get github.com/tansrai/tansr-go@v0.3.0`, or install a demo with `go install github.com/tansrai/tansr-go/examples/go-chat@v0.3.0`. Go 1.25+ is required. Set `TANSR_TOKEN_FILE` to a short-lived end-user token, then run `go-chat -base http://127.0.0.1:8787` (or `go run ./examples/go-chat` from a source checkout). Omit `-message` for interactive chat; use `-resume SESSION_ID` to continue the same session. Approval is always manual. `go-tools` demonstrates an explicitly bound read-only order lookup and requires both controller and executor operations. An executor-only host must configure `RunnerOptions.Status` using `Client.ExecutorStatus` after a controller establishes the terminal binding. `go-archive` requires a host-managed encryption key and an archive-enabled Serve; custom durable storage implements `archive.Store`. The demos do not promise all Node/Electron capabilities or silently switch session families.
 
 For a persisted archive ACK rejected with a confirmed stale revision, `archive.RecoverPending` and `go-archive -recover-ack NEW_UNIQUE_REQUEST_ID` expose explicit recovery. Keep the same binding, file and encryption key. A saved recovery intent always keeps its original identity on retry. The first actual recovery preparation atomically upgrades the local archive format to v2; older SDKs reject that format. Default synchronization does not start a new recovery or upgrade. Recovery does not silently bypass a revoked binding, expired epoch or unknown network outcome.
 

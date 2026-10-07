@@ -1,3 +1,3 @@
-module github.com/cpple/tansr-go
+module github.com/tansrai/tansr-go
 
 go 1.25

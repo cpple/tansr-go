@@ -1,6 +1,8 @@
 # Go 工具与档案接入
 
-适用版本：`github.com/cpple/tansr-go v0.2.0`。安装、认证、会话与错误处理先读 [Go 开发手册](Go开发手册.md)。本文面向把 SDK 嵌入自身程序的开发者，说明业务工具、本地档案和恢复的具体接线；合同以 [SDK2 / UAPI 冻结记录](GO-01-SDK2与UAPI合同冻结-2026-10-07.md) 为准。
+适用版本：`github.com/tansrai/tansr-go v0.3.0`。安装、认证、会话与错误处理先读 [Go 开发手册](Go开发手册.md)。本文面向把 SDK 嵌入自身程序的开发者，说明业务工具、本地档案和恢复的具体接线；合同以 [SDK2 / UAPI 冻结记录](GO-01-SDK2与UAPI合同冻结-2026-10-07.md) 为准。
+
+v0.3.0 从旧 `github.com/cpple/tansr-go v0.2.0` 迁移模块路径，工具、档案和 ACK 行为不变。升级须同步修改 `go.mod` 与全部 imports，不混用两种路径的类型；历史标签保持原样。迁移验收见 [GO-03](GO-03-tansrai开源迁移与发布.md)，MIT 范围见 [NOTICE](../NOTICE.md)。
 
 通信使用 HTTP 请求、SSE 事件和终端协议的 HTTP 分块上传。Go 终端安装业务函数、提供当前设备授权并保存档案；Serve/kernel 负责智能体运行、工具调度、权限裁决、上下文组织和用量。声明平台、持有旧文件或收到派工，都不能替代当前授权。
 
@@ -19,7 +21,7 @@ import (
     "context"
     "encoding/json"
 
-    "github.com/cpple/tansr-go/executor"
+    "github.com/tansrai/tansr-go/executor"
 )
 
 func OrderTool() (json.RawMessage, executor.ToolDefinition, executor.Tool, error) {
@@ -114,7 +116,7 @@ func OrderTool() (json.RawMessage, executor.ToolDefinition, executor.Tool, error
 
 上传异步进行，待发送上限包括编码后的请求体及在途块。容量耗尽后保留连续前缀、标记截断并继续排空输出源，避免因日志阻塞生产进程；因此 pipe 的 Write 成功不等于每个字节均保留。重试围绕原批次和水位，不能在 `ErrOutputGap` 后重新执行工具或从零冒充续传。
 
-v0.2.0 的业务 Runner **没有自动连接 OutputWriter**，也未附带跨平台 shell/PTY 实现、任意本地命令执行器或其权限 UI。输出 writer 已有合同级 HTTP 测试，不能把它描述成三个 Demo 已完成真实 shell 流联调。需要本地进程工具的宿主须另实现受控执行、取消和资源边界，不能把远端指令直接交给 `os/exec` 并宣称获得了完整 Node/Electron 体验。
+v0.3.0 的业务 Runner **没有自动连接 OutputWriter**，也未附带跨平台 shell/PTY 实现、任意本地命令执行器或其权限 UI。输出 writer 已有合同级 HTTP 测试，不能把它描述成三个 Demo 已完成真实 shell 流联调。需要本地进程工具的宿主须另实现受控执行、取消和资源边界，不能把远端指令直接交给 `os/exec` 并宣称获得了完整 Node/Electron 体验。
 
 ## 3. 在终端保存完整档案
 
@@ -133,7 +135,7 @@ import (
     "context"
     "errors"
 
-    "github.com/cpple/tansr-go/archive"
+    "github.com/tansrai/tansr-go/archive"
 )
 
 func SyncArchivePage(
@@ -187,7 +189,7 @@ FileStore 使用 AES-256-GCM，密钥不写入档案。宿主负责密钥生成�
 
 ### 3.3 明确处理旧修订 ACK
 
-某些合法时序下，ACK 准备后绑定修订被 Serve 收尾推进。不要自行修改 pending ACK 的 `ExpectedRevision`。v0.2.0 提供显式恢复：
+某些合法时序下，ACK 准备后绑定修订被 Serve 收尾推进。不要自行修改 pending ACK 的 `ExpectedRevision`。v0.3.0 提供显式恢复：
 
 ```go
 package docsample
@@ -195,7 +197,7 @@ package docsample
 import (
     "context"
 
-    "github.com/cpple/tansr-go/archive"
+    "github.com/tansrai/tansr-go/archive"
 )
 
 func RecoverArchiveAck(
@@ -240,12 +242,12 @@ Go FileStore 是本 SDK 的介质，不是 Node SQLite 数据库的直接读取�
 
 会话历史/摘要档案、长期记忆、配置、工具执行日志是不同对象。加密保存聊天档案不会自动把 Serve 的全部记忆迁移到终端，也不会取代原有 Serve 自身持久化或开发者提供的存储。
 
-| 当前需求 | v0.2.0 已提供 | 宿主仍须承担或后续补齐 |
+| 当前需求 | v0.3.0 已提供 | 宿主仍须承担或后续补齐 |
 |---|---|---|
 | 保存会话档案并按需回传 | `archive.Client`、FileStore、SyncOnce、RespondMaterials、显式 ACK 恢复 | UI、生命周期调度、密钥与授权、容量治理 |
 | 在设备运行显式业务函数 | Runner、Journal、连接与绑定、验证和回执 | 业务函数及资源权限，未知副作用的业务对账 |
 | 读取/命令管理记忆 | 通用 API 操作 `OpTerminalMemoryRead`、`OpTerminalMemoryCommand`、`OpTerminalMemoryReceipt` | 当前部署的 terminal/memory 协商、对应请求/回执与本地介质适配 |
 | 全量记忆发布与本地保存 | 冻结合同/通用 API 入口保留 | Go 高层 memory publication 执行器、记忆存储、同步/删除/恢复编排；业务 Runner 不承接保留的 MemoryPublication profile |
-| 多端同档案、备份、保留策略、高级缓存 | 可通过已冻结通用操作进一步实现 | v0.2.0 没有这些完整高层工作流或 Demo，不能从81操作目录推定已自动具备 |
+| 多端同档案、备份、保留策略、高级缓存 | 可通过已冻结通用操作进一步实现 | v0.3.0 没有这些完整高层工作流或 Demo，不能从81操作目录推定已自动具备 |
 
-通用操作必须经 `api.Client.Call` 和生成的操作常量，不手写旧前缀或遇错切换合同。更详细的围栏、幂等、错误和会话使用方式见 [Go 开发手册](Go开发手册.md)。三个可运行示例是 [go-chat](../examples/go-chat/main.go)、[go-tools](../examples/go-tools/main.go)、[go-archive](../examples/go-archive/main.go)；它们展示本版本已验证的固定范围，三平台实跑与发布证据见 [GO-02](GO-02-三平台运行验收与公开发布.md)。
+通用操作必须经 `api.Client.Call` 和生成的操作常量，不手写旧前缀或遇错切换合同。更详细的围栏、幂等、错误和会话使用方式见 [Go 开发手册](Go开发手册.md)。三个可运行示例是 [go-chat](../examples/go-chat/main.go)、[go-tools](../examples/go-tools/main.go)、[go-archive](../examples/go-archive/main.go)；它们展示既有固定范围，原 `v0.2.0` 三平台实跑证据见 [GO-02](GO-02-三平台运行验收与公开发布.md)，新模块的验收与发布证据见 [GO-03](GO-03-tansrai开源迁移与发布.md)。

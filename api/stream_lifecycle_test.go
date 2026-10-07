@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cpple/tansr-go/sse"
+	"github.com/tansrai/tansr-go/sse"
 )
 
 func TestInjectedClientCannotRedirectAuthenticatedRequests(t *testing.T) {

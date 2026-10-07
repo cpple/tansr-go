@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cpple/tansr-go/api"
-	"github.com/cpple/tansr-go/canonical"
-	"github.com/cpple/tansr-go/internal/wire"
+	"github.com/tansrai/tansr-go/api"
+	"github.com/tansrai/tansr-go/canonical"
+	"github.com/tansrai/tansr-go/internal/wire"
 )
 
 var (

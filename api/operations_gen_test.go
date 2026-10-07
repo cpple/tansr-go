@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cpple/tansr-go/internal/manifestgen"
+	"github.com/tansrai/tansr-go/internal/manifestgen"
 )
 
 var update = flag.Bool("update", false, "rewrite operations_gen.go from contract/api-manifest.json")

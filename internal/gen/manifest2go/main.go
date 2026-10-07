@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cpple/tansr-go/internal/manifestgen"
+	"github.com/tansrai/tansr-go/internal/manifestgen"
 )
 
 func main() {

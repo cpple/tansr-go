@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cpple/tansr-go/examples/internal/demoutil"
-	"github.com/cpple/tansr-go/session"
+	"github.com/tansrai/tansr-go/examples/internal/demoutil"
+	"github.com/tansrai/tansr-go/session"
 )
 
 type eventResult struct {

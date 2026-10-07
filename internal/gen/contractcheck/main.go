@@ -12,7 +12,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpple/tansr-go/internal/contractlock"
+	"github.com/tansrai/tansr-go/internal/contractlock"
 )
 
 func main() {

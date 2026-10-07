@@ -6,7 +6,7 @@ import (
 	"math"
 	"unicode/utf16"
 
-	"github.com/cpple/tansr-go/api"
+	"github.com/tansrai/tansr-go/api"
 )
 
 const mediaBytes = 32 * 1024 * 1024

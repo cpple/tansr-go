@@ -1,4 +1,4 @@
-// Package tansr is the root of the tansr Go SDK (module github.com/cpple/tansr-go).
+// Package tansr is the root of the tansr Go SDK (module github.com/tansrai/tansr-go).
 //
 // The module speaks the unified /api contract of tansr Serve (RFC-UAPI-1, contract unified-v1) and is
 // organised as one package per concern:

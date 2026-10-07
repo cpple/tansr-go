@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cpple/tansr-go/api"
+	"github.com/tansrai/tansr-go/api"
 )
 
 const maxSafeInteger = int64(9007199254740991)

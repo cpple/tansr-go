@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/cpple/tansr-go/api"
-	"github.com/cpple/tansr-go/internal/wire"
+	"github.com/tansrai/tansr-go/api"
+	"github.com/tansrai/tansr-go/internal/wire"
 )
 
 const recoverySchema = "sdk2-archive-recovery-v1"

@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/cpple/tansr-go/archive"
-	"github.com/cpple/tansr-go/examples/internal/demoutil"
+	"github.com/tansrai/tansr-go/archive"
+	"github.com/tansrai/tansr-go/examples/internal/demoutil"
 )
 
 type options struct {

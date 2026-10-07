@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cpple/tansr-go/canonical"
+	"github.com/tansrai/tansr-go/canonical"
 )
 
 // fakeServe is an httptest stand-in for tansr Serve built strictly from the unified-v1 golden bodies.

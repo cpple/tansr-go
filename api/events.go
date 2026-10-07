@@ -8,7 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/cpple/tansr-go/sse"
+	"github.com/tansrai/tansr-go/sse"
 )
 
 // EventsOptions are the inputs of Events.

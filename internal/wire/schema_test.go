@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cpple/tansr-go/canonical"
+	"github.com/tansrai/tansr-go/canonical"
 )
 
 func TestFrozenSchemasCompile(t *testing.T) {

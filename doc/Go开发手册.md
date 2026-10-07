@@ -1,17 +1,19 @@
 # Go SDK 开发手册
 
-适用版本：**`github.com/cpple/tansr-go v0.2.0`**，Go 1.25 及以上。SDK 与三个 Demo 采用 MIT；Serve 核心的许可不因此改变。
+适用版本：**`github.com/tansrai/tansr-go v0.3.0`**，Go 1.25 及以上。SDK 与三个 Demo 采用 MIT；Serve 核心的许可不因此改变。
 
 这份手册面向把智能体集成进现有 Go 应用的开发者。直接通过 `go.mod` 引入 SDK 即可，不需要复制仓库、安装 Demo 或在客户端安装 Node.js。SDK 连接独立运行的 Tansr Serve；Serve 可以在本机，也可以由开发者部署在远端。客户端负责界面、登录接入、明确安装的业务工具及本地档案，Serve/kernel 负责模型循环、会话、上下文组织、权限、裁决和用量。
 
-工具和档案的具体接线见 [Go 工具与档案接入](Go工具与档案接入.md)。发行实证见 [GO-02 三平台运行验收与公开发布](GO-02-三平台运行验收与公开发布.md)，合同依据见 [SDK2/UAPI 冻结记录](GO-01-SDK2与UAPI合同冻结-2026-10-07.md)。本手册新增示例不改变已发布 `v0.2.0` 的内容，也不需要重新打标签。
+工具和档案的具体接线见 [Go 工具与档案接入](Go工具与档案接入.md)。本版本的迁移和发行实证见 [GO-03](GO-03-tansrai开源迁移与发布.md)，原 `v0.2.0` 三平台运行证据见 [GO-02](GO-02-三平台运行验收与公开发布.md)，合同依据见 [SDK2/UAPI 冻结记录](GO-01-SDK2与UAPI合同冻结-2026-10-07.md)。
+
+从旧模块 `github.com/cpple/tansr-go v0.2.0` 升级时，须同步把 `go.mod` 和业务代码的全部 Go imports 改为 `github.com/tansrai/tansr-go`，再执行 `go mod tidy`。两种路径具有不同的 Go 类型身份，不混用其客户端、DTO 或错误类型。v0.3.0 只迁移模块身份，API 协议和 SDK 行为不变，历史标签不重打。SDK 与 Demo 的 MIT 范围及上游资料的许可边界见 [NOTICE](../NOTICE.md)。
 
 ## 1. 通过 Go Modules 集成
 
 已有项目在模块根目录执行：
 
 ```sh
-go get github.com/cpple/tansr-go@v0.2.0
+go get github.com/tansrai/tansr-go@v0.3.0
 ```
 
 加入业务代码及其 SDK `import` 后执行 `go mod tidy`，更新并保留实际使用的依赖。或者先在 `go.mod` 中增加固定版本依赖，再按同样顺序添加代码、运行 `tidy`：
@@ -21,18 +23,18 @@ module example.com/my-agent-app
 
 go 1.25.0
 
-require github.com/cpple/tansr-go v0.2.0
+require github.com/tansrai/tansr-go v0.3.0
 ```
 
 `go mod tidy` 会移除未使用依赖，应先加入下面的业务代码。提交应用的 `go.mod` 和 `go.sum`；正式构建不使用指向本地源码的 `replace`，不以 `@main` 代替固定发行版本。当前 SDK 仅使用 Go 标准库，无第三方 Go 运行依赖。普通应用构建不要求 CGO；`-race` 验收另需相应平台支持的 C 工具链。
 
 | 导入路径 | 用途 |
 | --- | --- |
-| `github.com/cpple/tansr-go/api` | 统一传输、发现、围栏、错误模型及 manifest 操作 |
-| `github.com/cpple/tansr-go/session` | 多轮会话、事件、审批、提问、取消、同轮输入、历史与快照 |
-| `github.com/cpple/tansr-go/executor` | 显式业务工具、执行器绑定、运行及回执、输出分块 |
-| `github.com/cpple/tansr-go/archive` | 加密档案、耐久后 ACK、材料交接、显式 ACK 恢复 |
-| `github.com/cpple/tansr-go/canonical`、`.../sse` | 需要实现合同适配时使用的底层编码与 SSE 解析 |
+| `github.com/tansrai/tansr-go/api` | 统一传输、发现、围栏、错误模型及 manifest 操作 |
+| `github.com/tansrai/tansr-go/session` | 多轮会话、事件、审批、提问、取消、同轮输入、历史与快照 |
+| `github.com/tansrai/tansr-go/executor` | 显式业务工具、执行器绑定、运行及回执、输出分块 |
+| `github.com/tansrai/tansr-go/archive` | 加密档案、耐久后 ACK、材料交接、显式 ACK 恢复 |
+| `github.com/tansrai/tansr-go/canonical`、`.../sse` | 需要实现合同适配时使用的底层编码与 SSE 解析 |
 
 仅需要对话时，导入 `api` 和 `session`。不要在业务项目中导入 `examples/internal`；它是 Demo 私有辅助代码。
 
@@ -74,8 +76,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/cpple/tansr-go/api"
-	"github.com/cpple/tansr-go/session"
+	"github.com/tansrai/tansr-go/api"
+	"github.com/tansrai/tansr-go/session"
 )
 
 func main() {
@@ -365,21 +367,21 @@ SDK 不自动重连或重发消息。宿主处理完事件后，把应用处理�
 
 当前通用层覆盖冻结 r7 的 81 个操作、11 个合同族，并不意味着所有能力都有 Go 一行式封装。严格控制 JSON、重复键拒绝、UTF-8、canonical、摘要、ACK、租约及执行身份仍然有效，不能用任意 struct 的宽松解析绕过。已有高层适配优先复用。
 
-`v0.2.0` 的明确交付范围是高层会话、显式业务工具、单端有界加密档案及三个命令行 Demo。未承诺完整记忆发布编排、双副本/跨设备同步、自动副本切换、保留策略与备份、高级缓存编排、与 Node SQLite 文件直接互读或所有 Node/Electron 能力一一对等。ACK 修订恢复已有显式 `archive.RecoverPending`，但默认同步不会新建恢复意图或自动升级旧档案格式；不能把这一项推广成全面自动恢复。
+`v0.3.0` 的明确交付范围是高层会话、显式业务工具、单端有界加密档案及三个命令行 Demo。未承诺完整记忆发布编排、双副本/跨设备同步、自动副本切换、保留策略与备份、高级缓存编排、与 Node SQLite 文件直接互读或所有 Node/Electron 能力一一对等。ACK 修订恢复已有显式 `archive.RecoverPending`，但默认同步不会新建恢复意图或自动升级旧档案格式；不能把这一项推广成全面自动恢复。
 
 ## 10. Demo、测试与排障
 
 业务项目通过 `go.mod` 集成；Demo 是独立的可选学习入口，可直接安装：
 
 ```sh
-go install github.com/cpple/tansr-go/examples/go-chat@v0.2.0
-go install github.com/cpple/tansr-go/examples/go-tools@v0.2.0
-go install github.com/cpple/tansr-go/examples/go-archive@v0.2.0
+go install github.com/tansrai/tansr-go/examples/go-chat@v0.3.0
+go install github.com/tansrai/tansr-go/examples/go-tools@v0.3.0
+go install github.com/tansrai/tansr-go/examples/go-archive@v0.3.0
 ```
 
 命令在 `GOBIN`，未设置时在 `GOPATH/bin`。配置第 2 节短期令牌后，执行 `go-chat -base <Serve源地址>`。`go-chat -resume <sessionId>` 恢复同一个会话；已经有活动轮时省略 `-message`，先观察或取消。`go-tools`、`go-archive` 的权限、身份和密钥要求见 [专项接入文档](Go工具与档案接入.md)。安装 Demo 不会在你的应用中添加 SDK 依赖，两者用途不同。
 
-开发应用时围绕自己的用户流程测试会话完成、人工审批、断线恢复、取消和未知结果；以 `httptest` 测试 UI/业务分支，再用部署中的 Serve 验证真实配置、认证和能力闭合。仓库本身的开发门见 [AGENTS.md](../AGENTS.md)，包括 vet、测试、race 条件门、构建和冻结合同检查。三平台原生验证的确切环境、合成模型边界及公开 `go.mod` 消费证据见 [GO-02](GO-02-三平台运行验收与公开发布.md)，不将它等同于你的生产配置已验收。
+开发应用时围绕自己的用户流程测试会话完成、人工审批、断线恢复、取消和未知结果；以 `httptest` 测试 UI/业务分支，再用部署中的 Serve 验证真实配置、认证和能力闭合。仓库本身的开发门见 [AGENTS.md](../AGENTS.md)，包括 vet、测试、race 条件门、构建和冻结合同检查。原 `v0.2.0` 三平台验证环境和合成模型边界见 [GO-02](GO-02-三平台运行验收与公开发布.md)，新模块验收和公开 `go.mod` 消费证据见 [GO-03](GO-03-tansrai开源迁移与发布.md)，不将其等同于你的生产配置已验收。
 
 | 现象 | 排查入口 |
 | --- | --- |

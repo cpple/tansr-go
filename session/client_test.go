@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cpple/tansr-go/api"
+	"github.com/tansrai/tansr-go/api"
 )
 
 func testClient(t *testing.T, handler http.HandlerFunc, options ...func(*api.Options)) *Client {

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cpple/tansr-go/api"
-	"github.com/cpple/tansr-go/session"
+	"github.com/tansrai/tansr-go/api"
+	"github.com/tansrai/tansr-go/session"
 )
 
 func testEvent(t *testing.T, kind, status string, seq int64, raw string) session.Event {

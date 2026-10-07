@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cpple/tansr-go/api"
+	"github.com/tansrai/tansr-go/api"
 )
 
 func TestCheckpointRoundTripKeepsOriginalBytes(t *testing.T) {

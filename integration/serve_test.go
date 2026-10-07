@@ -19,10 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cpple/tansr-go/api"
-	"github.com/cpple/tansr-go/archive"
-	"github.com/cpple/tansr-go/executor"
-	"github.com/cpple/tansr-go/session"
+	"github.com/tansrai/tansr-go/api"
+	"github.com/tansrai/tansr-go/archive"
+	"github.com/tansrai/tansr-go/executor"
+	"github.com/tansrai/tansr-go/session"
 )
 
 // 这些测试只有显式指定 CLI 工作区或同源便携宿主时运行，普通 Go 消费者不安装 Node。

@@ -1,6 +1,16 @@
 # Changelog · tansr-go
 
-`v0.1.0` 为原 UAPI 骨架；`v0.2.0` 汇总后续 UAPI r7、高层 SDK 和三平台运行验收。合同以 `contract/LOCK.json` 和 `contract/PROVENANCE.json` 为准。实际标签与公开代理结果见 GO-02 发布记录。
+`v0.1.0` 为原 UAPI 骨架；`v0.2.0` 汇总后续 UAPI r7、高层 SDK 和三平台运行验收；`v0.3.0` 迁移到 `tansrai` 的模块路径。合同以 `contract/LOCK.json` 和 `contract/PROVENANCE.json` 为准。旧版本发行证据见 GO-02，迁移版本的标签及公开代理结果见 [GO-03](doc/GO-03-tansrai开源迁移与发布.md)。
+
+## v0.3.0（2026-10-07）
+
+### tansrai 开源迁移（GO-03）
+
+- 仓库迁移到 `tansrai/tansr-go`，Go Modules 路径改为 `github.com/tansrai/tansr-go`；源码、Demo、生成器及当前教程统一使用新模块身份。
+- 从 `github.com/cpple/tansr-go v0.2.0` 升级时，须同时修改 `go.mod` 的依赖路径和全部 Go imports，再运行 `go mod tidy`。新旧路径是不同模块，不能混用其客户端、DTO、错误或接口类型，也不能只改下载地址而保留旧 imports。
+- 模块路径变化以新次版本发行；保留仓库历史、`v0.1.0` / `v0.2.0` 标签和原公开模块校验和，不覆盖旧标签或改写旧版本的 `go.mod`。
+- API 协议、运行行为、公开方法、存储格式及 Go 1.25 最低版本均不变；39 份冻结合同文件和生成操作目录保持原字节，未增加第三方依赖。
+- Go SDK 与 Demo 继续采用 MIT；上游参考资料及 Serve 核心的许可不变，范围见 [NOTICE](NOTICE.md)。
 
 ## v0.2.0（2026-10-07）
 

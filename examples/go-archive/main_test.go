@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cpple/tansr-go/archive"
+	"github.com/tansrai/tansr-go/archive"
 )
 
 func TestArchiveKeyAndInvalidOptionsFailBeforeNetwork(t *testing.T) {

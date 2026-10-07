@@ -16,8 +16,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cpple/tansr-go/api"
-	"github.com/cpple/tansr-go/canonical"
+	"github.com/tansrai/tansr-go/api"
+	"github.com/tansrai/tansr-go/canonical"
 )
 
 func fixture(t *testing.T) (Binding, Status, Page, map[string][]byte) {

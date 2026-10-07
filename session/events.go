@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cpple/tansr-go/api"
+	"github.com/tansrai/tansr-go/api"
 )
 
 // Event retains unknown additive kernel/control fields and the exact unified

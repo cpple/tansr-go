@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"reflect"
 
-	"github.com/cpple/tansr-go/examples/internal/demoutil"
-	"github.com/cpple/tansr-go/executor"
-	"github.com/cpple/tansr-go/session"
+	"github.com/tansrai/tansr-go/examples/internal/demoutil"
+	"github.com/tansrai/tansr-go/executor"
+	"github.com/tansrai/tansr-go/session"
 )
 
 // This is the same declaration and business result as the existing Serve demo

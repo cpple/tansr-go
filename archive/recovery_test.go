@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cpple/tansr-go/api"
+	"github.com/tansrai/tansr-go/api"
 )
 
 func prepareRecoveryFixture(t *testing.T) (*FileStore, StoreOptions, Ack) {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/cpple/tansr-go/executor"
+	"github.com/tansrai/tansr-go/executor"
 )
 
 func TestOrderToolHasNoGeneralCommandSurface(t *testing.T) {

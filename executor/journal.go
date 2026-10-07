@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/cpple/tansr-go/canonical"
+	"github.com/tansrai/tansr-go/canonical"
 )
 
 // FileJournal stores immutable claims and receipts in a host-controlled private directory.

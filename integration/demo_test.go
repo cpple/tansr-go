@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cpple/tansr-go/session"
+	"github.com/tansrai/tansr-go/session"
 )
 
 func demoBinary(t *testing.T, name string) string {
