@@ -4,7 +4,7 @@ Tansr Serve 的 Go SDK：终端负责接入、呈现、受控业务工具和本�
 
 Go SDK for Tansr Serve. The client stays lightweight: Serve owns the agent loop, context and permission decisions; Go hosts presentation, explicitly installed business tools and local archive storage.
 
-**当前源码：v0.2.0 发布候选。** 在已发布的 UAPI 骨架上增加 `session`、实际 `executor` / `archive` 和三个 Demo。已有 `v0.1.0` 标签仍是原骨架；三平台验收完成后才发布新标签，`go get ...@latest` 目前不代表已取得以下新增功能。请从当前源码运行，发行状态以 tag 和发布记录为准。
+**v0.2.0** 在原 `v0.1.0` UAPI 骨架上增加 `session`、实际 `executor` / `archive` 和三个 Demo。它包含 v0 次版本的源码不兼容变化，升级前请阅读 [CHANGELOG](CHANGELOG.md)。发行标签及公开消费证据见 [GO-02](doc/GO-02-三平台运行验收与公开发布.md)。
 
 合同以 [SDK2 / UAPI 冻结记录](doc/GO-01-SDK2与UAPI合同冻结-2026-10-07.md) 和 `contract/LOCK.json` 为准。功能范围见 [GO-01 开发及验收](doc/GO-01-Go-SDK与Demo开发及验收.md)；本批三平台运行与发行状态见 [GO-02](doc/GO-02-三平台运行验收与公开发布.md)。
 
@@ -25,6 +25,17 @@ Go SDK for Tansr Serve. The client stays lightweight: Serve owns the agent loop,
 三个 Demo 都显式选择 **`sdk1` 会话族，通过统一 `/api` 接入**，然后按部署能力使用 SDK2 执行与档案扩展；这里的族名不是旧路由。`session.Client` 也允许显式选择 `sdk2-offload-v1`，但调用方必须完整接线该族要求的 Source / 档案生命周期，不能仅改字符串就视为完成历史卸载。服务未安装、应用未授权或围栏关闭时返回明确错误，不自动切换族。
 
 ## 快速开始
+
+在你的 Go 项目中安装固定版本；三个 Demo 也可以直接安装为命令：
+
+```sh
+go get github.com/cpple/tansr-go@v0.2.0
+go install github.com/cpple/tansr-go/examples/go-chat@v0.2.0
+go install github.com/cpple/tansr-go/examples/go-tools@v0.2.0
+go install github.com/cpple/tansr-go/examples/go-archive@v0.2.0
+```
+
+安装的命令位于 `GOBIN`，未设置时位于 `GOPATH/bin`。以下源码示例中的 `go run ./examples/go-chat` 可替换为安装后的 `go-chat`，其他两个命令同理。
 
 准备可访问的统一 API Serve，并由你的登录服务签发**短期终端用户令牌**。不要把平台 `appkey` 或模型密钥分发给终端。示例每次请求读取 `TANSR_TOKEN_FILE`；没有该配置时读取 `TANSR_TOKEN`。令牌文件优先，续期必须保持相同应用和用户；切换账号请销毁客户端实例再建立新实例。
 
@@ -156,7 +167,7 @@ if err != nil { return err }
 
 ## Verification / English quick start
 
-Use the current unreleased source checkout; the existing `v0.1.0` tag does not contain these additions. Set `TANSR_TOKEN_FILE` to a short-lived end-user token, then run `go run ./examples/go-chat -base http://127.0.0.1:8787`. Omit `-message` for interactive chat; use `-resume SESSION_ID` to continue the same session. Approval is always manual. `go-tools` demonstrates an explicitly bound read-only order lookup and requires both controller and executor operations. An executor-only host must configure `RunnerOptions.Status` using `Client.ExecutorStatus` after a controller establishes the terminal binding. `go-archive` requires a host-managed encryption key and an archive-enabled Serve; custom durable storage implements `archive.Store`. The demos do not promise all Node/Electron capabilities or silently switch session families.
+Install the SDK with `go get github.com/cpple/tansr-go@v0.2.0`, or install a demo with `go install github.com/cpple/tansr-go/examples/go-chat@v0.2.0`. Go 1.25+ is required. Set `TANSR_TOKEN_FILE` to a short-lived end-user token, then run `go-chat -base http://127.0.0.1:8787` (or `go run ./examples/go-chat` from a source checkout). Omit `-message` for interactive chat; use `-resume SESSION_ID` to continue the same session. Approval is always manual. `go-tools` demonstrates an explicitly bound read-only order lookup and requires both controller and executor operations. An executor-only host must configure `RunnerOptions.Status` using `Client.ExecutorStatus` after a controller establishes the terminal binding. `go-archive` requires a host-managed encryption key and an archive-enabled Serve; custom durable storage implements `archive.Store`. The demos do not promise all Node/Electron capabilities or silently switch session families.
 
 For a persisted archive ACK rejected with a confirmed stale revision, `archive.RecoverPending` and `go-archive -recover-ack NEW_UNIQUE_REQUEST_ID` expose explicit recovery. Keep the same binding, file and encryption key. A saved recovery intent always keeps its original identity on retry. The first actual recovery preparation atomically upgrades the local archive format to v2; older SDKs reject that format. Default synchronization does not start a new recovery or upgrade. Recovery does not silently bypass a revoked binding, expired epoch or unknown network outcome.
 
