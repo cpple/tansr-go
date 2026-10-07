@@ -69,7 +69,7 @@ func TestRealServeChatAndArchiveDemos(t *testing.T) {
 	if id == "" {
 		t.Fatalf("go-chat did not publish resumable session: %s", output)
 	}
-	file := filepath.Join(t.TempDir(), "demo.archive")
+	file := filepath.Join(physicalTempDir(t), "demo.archive")
 	for i := 0; i < 2; i++ {
 		command = exec.CommandContext(ctx, archiver, "-base", f.BaseURL, "-session", id, "-file", file)
 		command.Env = demoEnvironment(f)

@@ -4,9 +4,9 @@ Tansr Serve 的 Go SDK：终端负责接入、呈现、受控业务工具和本�
 
 Go SDK for Tansr Serve. The client stays lightweight: Serve owns the agent loop, context and permission decisions; Go hosts presentation, explicitly installed business tools and local archive storage.
 
-**当前源码：GO-01 未发布源码。** 在已发布的 UAPI 骨架上增加 `session`、实际 `executor` / `archive` 和三个 Demo。已有 `v0.1.0` 标签仍是原骨架；本批尚未发布新标签，`go get ...@latest` 不代表已取得以下新增功能。请从当前源码运行，发行状态以 tag 和发布记录为准。
+**当前源码：v0.2.0 发布候选。** 在已发布的 UAPI 骨架上增加 `session`、实际 `executor` / `archive` 和三个 Demo。已有 `v0.1.0` 标签仍是原骨架；三平台验收完成后才发布新标签，`go get ...@latest` 目前不代表已取得以下新增功能。请从当前源码运行，发行状态以 tag 和发布记录为准。
 
-合同以 [SDK2 / UAPI 冻结记录](doc/GO-01-SDK2与UAPI合同冻结-2026-10-07.md) 和 `contract/LOCK.json` 为准。工程范围、验收状态见 [GO-01 开发及验收](doc/GO-01-Go-SDK与Demo开发及验收.md)。
+合同以 [SDK2 / UAPI 冻结记录](doc/GO-01-SDK2与UAPI合同冻结-2026-10-07.md) 和 `contract/LOCK.json` 为准。功能范围见 [GO-01 开发及验收](doc/GO-01-Go-SDK与Demo开发及验收.md)；本批三平台运行与发行状态见 [GO-02](doc/GO-02-三平台运行验收与公开发布.md)。
 
 ## 能力与边界
 
@@ -100,6 +100,16 @@ go run ./examples/go-archive -base http://127.0.0.1:8787 -binding BINDING_ID -fi
 
 示例核对绑定和当前身份、下载并校验字节与记录链，加密持久化后才确认覆盖；失去 ACK 响应时下次使用原 ACK 恢复。它最多同步 `-max-pages` 页（默认 64），达到上限可保留同一绑定、文件和密钥再次运行。错误密钥、损坏或身份不符都失败退出，不清空文件重建。默认文件存储限额为 4096 条记录、64 MiB；大型档案应实现应用自己的存储适配。
 
+若原 ACK 被 Serve 明确拒绝为 `412 / if_match_stale`，可主动使用已有绑定和档案执行一次恢复：
+
+```powershell
+go run ./examples/go-archive -base http://127.0.0.1:8787 -binding BINDING_ID -file "$env:LOCALAPPDATA\Tansr\archive.bin" -recover-ack RECOVERY_REQUEST_ID
+```
+
+`RECOVERY_REQUEST_ID` 使用独立的稳定请求标识；中断后保留同一文件、密钥和标识重试，已持久化的恢复始终使用原身份。恢复先重发原 ACK；仅在服务端明确证明原修订过期后，才准备恢复并原子升级本地介质为 v2，**旧版 SDK 将拒绝读取升级后的档案**。默认同步不会创建恢复请求或自动升级，但会续办已持久化的恢复意图。未知网络错误、忙碌、撤权、过期等不作为更换请求身份的理由。命令只恢复一次并报告确认回执；成功后退出，不代表全部档案同步完成，需另行去掉 `-recover-ack` 继续同步。
+
+Explicit recovery is also available as `-recover-ack RECOVERY_REQUEST_ID` with an existing `-binding` and archive `-file`. It replays the original ACK first; only a proven stale revision permits durable recovery preparation and a format-v2 upgrade, which older SDKs reject. Preserve the same file, key and recovery ID after interruption. The recovery command confirms one pending ACK and exits; run normal synchronization separately for remaining pages. Normal synchronization never creates a recovery intent or silently upgrades the file, but can resume an intent already saved by explicit recovery.
+
 `archive.Store` 是自有数据库或其他耐久介质的适配入口；`SyncOnce` 与 `RespondMaterials` 均接收该接口，`FileStore` 是内置实现。适配器须在 `Receive` 返回前原子保存已验证的记录、全部正文/附件和原始待决 ACK，`Confirm` 须核对并耐久保存原操作的完成回执；本地 Head、待决 ACK 和已确认 Coverage 不能互换。`Identity` / `StorageLimits` 在实例生命周期内固定，`CheckAccess` 接当前宿主授权。内置文件格式不是 Node 的 SQLite 存储格式，不提供直接互读、自动副本切换或自动会话恢复。
 
 Demo 的 `CheckAccess` 在本次进程中固定已认证绑定并响应退出；正式应用必须接当前登录、撤权、删除代际等授权状态，不能凭档案文件内的身份字段决定谁可读取。摘要、模型上下文和材料采用决策仍由 Serve 核心负责；本地写入成功不等于材料已被核心消费。
@@ -148,6 +158,8 @@ if err != nil { return err }
 
 Use the current unreleased source checkout; the existing `v0.1.0` tag does not contain these additions. Set `TANSR_TOKEN_FILE` to a short-lived end-user token, then run `go run ./examples/go-chat -base http://127.0.0.1:8787`. Omit `-message` for interactive chat; use `-resume SESSION_ID` to continue the same session. Approval is always manual. `go-tools` demonstrates an explicitly bound read-only order lookup and requires both controller and executor operations. An executor-only host must configure `RunnerOptions.Status` using `Client.ExecutorStatus` after a controller establishes the terminal binding. `go-archive` requires a host-managed encryption key and an archive-enabled Serve; custom durable storage implements `archive.Store`. The demos do not promise all Node/Electron capabilities or silently switch session families.
 
+For a persisted archive ACK rejected with a confirmed stale revision, `archive.RecoverPending` and `go-archive -recover-ack NEW_UNIQUE_REQUEST_ID` expose explicit recovery. Keep the same binding, file and encryption key. A saved recovery intent always keeps its original identity on retry. The first actual recovery preparation atomically upgrades the local archive format to v2; older SDKs reject that format. Default synchronization does not start a new recovery or upgrade. Recovery does not silently bypass a revoked binding, expired epoch or unknown network outcome.
+
 ```sh
 gofmt -l .                                      # must be empty
 go vet ./...
@@ -157,4 +169,4 @@ go run ./internal/gen/contractcheck               # frozen-source copy check
 # Add go test -race ./... when a supported CGO toolchain is available.
 ```
 
-`integration/` 对本地真实 Serve 的公开 `/api` 路由运行合成会话、工具与档案场景，并可编译运行三个 Demo；这与模拟 HTTP 单测不同，也不代表付费真实模型、生产部署或正式发行。运行结果、操作系统覆盖与剩余外部条件以本批验收记录为准。License: [Tansr Proprietary License](LICENSE).
+`integration/` 对本地真实 Serve 的公开 `/api` 路由运行合成会话、工具与档案场景，并可编译运行三个 Demo；这与模拟 HTTP 单测不同，也不代表付费真实模型、生产部署或正式发行。运行结果、操作系统覆盖与剩余外部条件以本批验收记录为准。Go SDK 与 Demo 采用 [MIT License](LICENSE)；冻结上游参考资料保留来源许可，详见 [NOTICE](NOTICE.md)。

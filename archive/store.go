@@ -16,6 +16,7 @@ import (
 )
 
 const storeFormat = "tansr-go-archive-v1"
+const recoveryStoreFormat = "tansr-go-archive-v2"
 
 var storeMagic = []byte("Tansr-Go-Archive/1\n")
 
@@ -71,6 +72,7 @@ type storeState struct {
 	Pending     *Ack                     `json:"pending"`
 	Coverage    *Coverage                `json:"coverage"`
 	LastReceipt *MutationReceipt         `json:"lastReceipt"`
+	Rebases     []rebaseEntry            `json:"rebases,omitempty"`
 }
 
 // FileStore serializes access in this process and takes an OS file lock across
@@ -350,6 +352,7 @@ func (s *FileStore) Close() error {
 	s.state.Pending = nil
 	s.state.Coverage = nil
 	s.state.LastReceipt = nil
+	s.state.Rebases = nil
 	return s.closeFiles()
 }
 func clone[T any](v T) T {
@@ -488,11 +491,22 @@ func logicalBytes(state storeState) (int, error) {
 	for _, a := range state.Artifacts {
 		total += len(a.Body)
 	}
+	for _, row := range state.Rebases {
+		raw, err := canon(row)
+		if err != nil {
+			return 0, err
+		}
+		total += len(raw)
+		if row.Result == nil && row.OriginalReceipt == nil {
+			// Reserve the frozen maximum result before transmitting a rebase.
+			total += rebaseResponseBytes
+		}
+	}
 	return total, nil
 }
 func (s *FileStore) validateState() error {
 	state := s.state
-	if state.Format != storeFormat || state.Identity != s.identity || state.Limits != s.limits || state.Records == nil || state.Artifacts == nil || len(state.Records) > s.limits.MaxRecords || len(state.Artifacts) > s.limits.MaxArtifacts {
+	if state.Format != storeFormat && state.Format != recoveryStoreFormat || state.Identity != s.identity || state.Limits != s.limits || state.Records == nil || state.Artifacts == nil || len(state.Records) > s.limits.MaxRecords || len(state.Artifacts) > s.limits.MaxArtifacts {
 		return ErrIntegrity
 	}
 	total, err := logicalBytes(state)
@@ -556,7 +570,7 @@ func (s *FileStore) validateState() error {
 	} else if len(state.Records) > 0 && (state.Coverage == nil || seq(state.Coverage.ThroughSequence) != int64(len(state.Records))) {
 		return ErrIntegrity
 	}
-	return nil
+	return s.validateRebases()
 }
 
 // Receive verifies and durably commits one page and all its referenced bytes.
@@ -582,6 +596,9 @@ func (s *FileStore) Receive(binding Binding, status Status, page Page, artifacts
 	}
 	if err = validate("RequestIdentity", request); err != nil {
 		return zero, err
+	}
+	if reservedRebaseIdentity(s.state, request) {
+		return zero, ErrReceipt
 	}
 	head := stateHead(s.state)
 	var after *string
@@ -712,6 +729,12 @@ func (s *FileStore) Confirm(receipt MutationReceipt) error {
 	next.Pending = nil
 	copy := clone(receipt)
 	next.LastReceipt = &copy
+	for index := range next.Rebases {
+		row := &next.Rebases[index]
+		if row.Result == nil && row.OriginalReceipt == nil && equal(row.Intent.Previous, *s.state.Pending) {
+			row.OriginalReceipt = &copy
+		}
+	}
 	if err := s.save(next); err != nil {
 		return err
 	}

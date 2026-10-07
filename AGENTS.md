@@ -6,6 +6,7 @@
 ## SDK2 / UAPI 冻结基线
 
 先读 `doc/GO-01-SDK2与UAPI合同冻结-2026-10-07.md` 与本轮 `doc/GO-01-Go-SDK与Demo开发及验收.md`。
+GO-01 已收编；后续三平台实际运行与公开发行按 `doc/GO-02-三平台运行验收与公开发布.md` 执行，沿用同一冻结合同，不重开 GO-01 的任务分母。
 `contract/LOCK.json` 锁定 CLI `83c64b2c` 的 39 份合同/语义/参考文件；SDK 实现不准顺带改 schema、金样、操作目录或冻结字节。
 执行 `go run ./internal/gen/contractcheck` 校验本地锁，跨仓对照增加 `-source J:/tansr/tansr-cli`。新合同须先提修订和会签，再显式更新基线，不自动跟随上游 HEAD。
 
@@ -44,4 +45,4 @@ go test ./internal/manifestgen -update       # 宿主拒绝启动新编译可执
 
 ## 提交
 
-格式 `type(scope): 具体变化 (任务号)`，合同迁移历史使用 UAPI-01，本轮 SDK 与 Demo 使用 GO-01；UTF-8、LF、无 BOM(`git commit -F`)。不自行添加远端、不推送开发分支；远端发布仍由主线发布负责人执行。
+格式 `type(scope): 具体变化 (任务号)`，合同迁移历史使用 UAPI-01，高层 SDK 与 Demo 使用 GO-01，三平台运行和公开发行使用 GO-02；UTF-8、LF、无 BOM(`git commit -F`)。不自行添加远端、不推送开发分支；远端发布仍由主线发布负责人执行。

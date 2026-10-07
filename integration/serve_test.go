@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,7 +25,7 @@ import (
 	"github.com/cpple/tansr-go/session"
 )
 
-// 这些测试只有显式指定 CLI 工作区时运行，普通 Go 消费者不安装 Node。
+// 这些测试只有显式指定 CLI 工作区或同源便携宿主时运行，普通 Go 消费者不安装 Node。
 type fixture struct {
 	BaseURL               string          `json:"baseURL"`
 	Token                 string          `json:"token"`
@@ -38,14 +39,21 @@ type fixture struct {
 
 // loseAckResponse forwards the real request and drains its real success response,
 // then models a connection loss. It never fabricates a Serve response or receipt.
-type loseAckResponse struct{ lost atomic.Bool }
+type loseAckResponse struct {
+	lost      atomic.Bool
+	operation string
+}
 
 func (l *loseAckResponse) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := http.DefaultTransport.RoundTrip(request)
 	if err != nil {
 		return nil, err
 	}
-	ack, _ := api.Lookup(api.OpArchiveAckCommit)
+	operation := l.operation
+	if operation == "" {
+		operation = api.OpArchiveAckCommit
+	}
+	ack, _ := api.Lookup(operation)
 	prefix, suffix, _ := strings.Cut(ack.Path, ":id")
 	if request.Method == ack.Method && strings.HasPrefix(request.URL.Path, prefix) && strings.HasSuffix(request.URL.Path, suffix) && response.StatusCode == http.StatusOK && l.lost.CompareAndSwap(false, true) {
 		_, _ = io.Copy(io.Discard, response.Body)
@@ -55,23 +63,28 @@ func (l *loseAckResponse) RoundTrip(request *http.Request) (*http.Response, erro
 	return response, nil
 }
 
+func physicalTempDir(t *testing.T) string {
+	t.Helper()
+	// Canonicalize only a directory created by this test, so macOS TMPDIR's
+	// /var symlink does not violate Go/Serve archive stores' physical-path policy.
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
 func startFixture(t *testing.T, mode string) fixture {
 	t.Helper()
 	cliRoot := os.Getenv("TANSR_GO_SERVE_CLI_ROOT")
-	if cliRoot == "" {
-		t.Skip("真实 Serve 集成需要 TANSR_GO_SERVE_CLI_ROOT 指向已安装依赖的 CLI 仓")
+	portable := os.Getenv("TANSR_GO_SERVE_FIXTURE")
+	if cliRoot == "" && portable == "" {
+		t.Skip("真实 Serve 集成需要 TANSR_GO_SERVE_CLI_ROOT 或同源 TANSR_GO_SERVE_FIXTURE")
 	}
-	cliRoot, err := filepath.Abs(cliRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var err error
 	node := os.Getenv("TANSR_GO_SERVE_NODE")
 	if node == "" {
 		node = "node"
-	}
-	script, err := filepath.Abs("serve-fixture.mjs")
-	if err != nil {
-		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	moduleURL := func(parts ...string) string {
@@ -81,9 +94,39 @@ func startFixture(t *testing.T, mode string) fixture {
 		}
 		return (&url.URL{Scheme: "file", Path: p}).String()
 	}
-	cmd := exec.CommandContext(ctx, node, "--import", moduleURL(cliRoot, "scripts", "inject-globals.mjs"),
-		"--import", moduleURL(cliRoot, "node_modules", "tsx", "dist", "loader.mjs"), script, cliRoot, t.TempDir(), mode)
-	cmd.Dir = cliRoot
+	var cmd *exec.Cmd
+	if portable != "" {
+		portable, err = filepath.Abs(portable)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		info, statErr := os.Stat(portable)
+		if statErr != nil || !info.Mode().IsRegular() {
+			cancel()
+			t.Fatalf("portable Serve fixture must be a regular file: %v", statErr)
+		}
+		// Portable output embeds the original manifest and statically bundles the
+		// same source imports. A fresh working directory prevents accidental
+		// fallback to an installed CLI tree or its node_modules.
+		directory := physicalTempDir(t)
+		cmd = exec.CommandContext(ctx, node, portable, ".", directory, mode)
+		cmd.Dir = directory
+	} else {
+		cliRoot, err = filepath.Abs(cliRoot)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		script, err := filepath.Abs("serve-fixture.mjs")
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		cmd = exec.CommandContext(ctx, node, "--import", moduleURL(cliRoot, "scripts", "inject-globals.mjs"),
+			"--import", moduleURL(cliRoot, "node_modules", "tsx", "dist", "loader.mjs"), script, cliRoot, physicalTempDir(t), mode)
+		cmd.Dir = cliRoot
+	}
 	stderr := new(bytes.Buffer)
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
@@ -375,7 +418,7 @@ func TestRealServeArchiveClient(t *testing.T) {
 			if _, err = rand.Read(key); err != nil {
 				t.Fatal(err)
 			}
-			path := filepath.Join(t.TempDir(), "terminal.archive")
+			path := filepath.Join(physicalTempDir(t), "terminal.archive")
 			options := archive.StoreOptions{Path: path, Key: key, Identity: identity, CheckAccess: func(got archive.Identity) error {
 				if got != identity || got.ApplicationScopeID != f.ApplicationScopeID || got.EndUserID != f.EndUserID {
 					return fmt.Errorf("unexpected archive identity")
@@ -402,6 +445,10 @@ func TestRealServeArchiveClient(t *testing.T) {
 					break
 				}
 			}
+			// turn.completed is delivered before archive finish-run persists its
+			// control revision. Fence this loss-only test on public session idle;
+			// the separate rebase test deliberately changes the revision after save.
+			waitArchiveIdle(t, ctx, s)
 			_, err = archive.SyncOnce(ctx, a, store, "go-archive-sync")
 			if err == nil || !loss.lost.Load() {
 				t.Fatalf("ack response loss not observed: %v", err)
@@ -462,6 +509,198 @@ func TestRealServeArchiveClient(t *testing.T) {
 			if err != nil || resumed.ID() != s.ID() {
 				t.Fatalf("explicit %s resume: %v", family, err)
 			}
+		})
+	}
+}
+
+func waitArchiveIdle(t *testing.T, ctx context.Context, s *session.Session) {
+	t.Helper()
+	for {
+		meta, err := s.Meta(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if meta.Status == "idle" {
+			return
+		}
+		if meta.Status != "running" {
+			t.Fatalf("session ended before archive commit: %s", meta.Status)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// A completed second turn deterministically advances the original binding's
+// revision after the first page was durably received. No fixture edits or sleeps
+// stand in for the real control CAS, idle lease, rebase mapping or receipt.
+func TestRealServeArchiveRebase(t *testing.T) {
+	for _, family := range []string{"sdk1", "sdk2-offload-v1"} {
+		t.Run(family, func(t *testing.T) {
+			mode := "archive"
+			if family == "sdk2-offload-v1" {
+				mode = "archive-offload"
+			}
+			f := startFixture(t, mode)
+			loss := &loseAckResponse{operation: api.OpArchiveAckRebase}
+			transport, err := api.New(api.Options{BaseURL: f.BaseURL, Token: f.Token, SessionFamily: family, EventEnvelope: true, HTTPClient: &http.Client{Transport: loss}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			sessions, err := session.New(transport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			create := session.CreateOptions{}
+			if family == "sdk2-offload-v1" {
+				create.RequestID = "rebase-session-create"
+			}
+			s, err := sessions.Create(ctx, create)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close(context.Background(), session.WriteOptions{})
+			stream, err := s.Events(ctx, fmt.Sprint(s.Created().LastSeq))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			turn := func(requestID string) {
+				t.Helper()
+				if _, err := s.Send(ctx, "GO-ARCHIVE", session.WriteOptions{IdempotencyKey: requestID}); err != nil {
+					t.Fatal(err)
+				}
+				for {
+					event, err := stream.Next()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if outcome, done := event.TurnOutcome(); done {
+						if outcome.Status != session.OutcomeCompleted {
+							t.Fatalf("archive turn failed: %+v", outcome)
+						}
+						break
+					}
+				}
+				waitArchiveIdle(t, ctx, s)
+			}
+			turn("rebase-first-turn")
+			a := archive.NewClient(transport)
+			target, err := a.BindingTarget(ctx, s.ID())
+			if err != nil || target.BindingID == nil {
+				t.Fatal("binding target", err)
+			}
+			binding, err := a.Binding(ctx, *target.BindingID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, err := a.Status(ctx, binding.BindingID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity, err := archive.IdentityFrom(binding, status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			page, err := a.ReadRecords(ctx, binding, nil)
+			if err != nil || len(page.Records) == 0 {
+				t.Fatal("first page", err)
+			}
+			objects := map[string][]byte{}
+			for _, record := range page.Records {
+				for _, ref := range append([]archive.ArtifactRef{record.Payload}, record.Attachments...) {
+					if _, ok := objects[ref.ArtifactID]; ok {
+						continue
+					}
+					body, err := a.ReadArtifact(ctx, binding, ref)
+					if err != nil {
+						t.Fatal(err)
+					}
+					objects[ref.ArtifactID] = body
+				}
+			}
+			key := make([]byte, 32)
+			if _, err = rand.Read(key); err != nil {
+				t.Fatal(err)
+			}
+			options := archive.StoreOptions{Path: filepath.Join(physicalTempDir(t), "recovery.archive"), Key: key, Identity: identity, CheckAccess: func(got archive.Identity) error {
+				if got != identity {
+					return archive.ErrIntegrity
+				}
+				return nil
+			}}
+			store, err := archive.OpenFileStore(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = store.Close() }()
+			previous, err := store.Receive(binding, status, page, objects, archive.RequestIdentity{RequestID: "stale-original-ack", OperationEpoch: binding.OperationEpoch.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			turn("rebase-second-turn")
+			current, err := a.Binding(ctx, binding.BindingID)
+			if err != nil || current.Revision == previous.ExpectedRevision {
+				t.Fatal("real run did not advance binding", err)
+			}
+			if _, err = archive.SyncOnce(ctx, a, store, "must-not-replace-original"); err == nil {
+				t.Fatal("stale original ACK unexpectedly accepted")
+			} else {
+				var apiErr *api.APIError
+				if !errors.As(err, &apiErr) || apiErr.Code != api.CodePreconditionFailed || apiErr.Detail.Reason != api.ReasonIfMatchStale {
+					t.Fatalf("not the expected revision conflict: %v", err)
+				}
+			}
+			if _, err = archive.RecoverPending(ctx, a, store, "rebase-fixed-request"); err == nil || !loss.lost.Load() {
+				t.Fatalf("real committed rebase response was not lost: %v", err)
+			}
+			intent, err := store.PendingRebase()
+			if err != nil || intent == nil || intent.Request.RequestID != "rebase-fixed-request" {
+				t.Fatal("recovery intent not durable", err)
+			}
+			if coverage, _ := store.Coverage(); coverage != nil {
+				t.Fatal("lost rebase response advanced coverage")
+			}
+			if err = store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = archive.OpenFileStore(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := archive.SyncOnce(ctx, a, store, "must-not-replace-recovery")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !recovered.Recovered || recovered.Receipt == nil || recovered.Receipt.Request != intent.Request {
+				t.Fatalf("recovered wrong operation: %+v", recovered)
+			}
+			if pending, _ := store.Pending(); pending != nil {
+				t.Fatal("old ACK remained pending")
+			}
+			if pending, _ := store.PendingRebase(); pending != nil {
+				t.Fatal("recovery remained pending")
+			}
+			coverage, err := store.Coverage()
+			if err != nil || coverage == nil || *coverage != previous.Coverage {
+				t.Fatal("wrong local coverage", err)
+			}
+			status, err = a.Status(ctx, binding.BindingID)
+			if err != nil || status.AcknowledgedCoverage == nil || *status.AcknowledgedCoverage != *coverage {
+				t.Fatal("server coverage disagrees", err)
+			}
+			for _, record := range page.Records {
+				body, err := store.Body(record.Payload)
+				if err != nil || !bytes.Equal(body, objects[record.Payload.ArtifactID]) {
+					t.Fatal("recovery altered original bytes", err)
+				}
+			}
+			t.Logf("original ACK revision=%s rejected after run revision=%s; recovery=%s receipt revision=%s; preserved coverage=%s", previous.ExpectedRevision, current.Revision, intent.Request.RequestID, recovered.Receipt.Revision, coverage.ThroughSequence)
 		})
 	}
 }

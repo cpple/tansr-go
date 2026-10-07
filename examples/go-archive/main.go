@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,17 +20,29 @@ import (
 
 type options struct {
 	base, session, binding, source, path string
+	recoverAck                           string
 	maxPages                             int
+}
+
+func bindFlags(flags *flag.FlagSet, opts *options) {
+	flags.StringVar(&opts.base, "base", "http://127.0.0.1:8787", "Serve origin")
+	flags.StringVar(&opts.session, "session", "", "session to bind; required if -binding is absent")
+	flags.StringVar(&opts.binding, "binding", "", "reopen an existing archive binding")
+	flags.StringVar(&opts.source, "source", "go-demo", "stable source identity for a new binding")
+	flags.StringVar(&opts.path, "file", "", "local encrypted archive filename (required)")
+	flags.IntVar(&opts.maxPages, "max-pages", 64, "maximum pages this run; rerun to continue")
+	flags.Func("recover-ack", "recover one pending ACK with REQUEST_ID, then exit; requires -binding and an existing -file; may upgrade local format (older SDKs cannot reopen)", func(requestID string) error {
+		if requestID == "" {
+			return errors.New("recover-ack requires a request ID")
+		}
+		opts.recoverAck = requestID
+		return nil
+	})
 }
 
 func main() {
 	var opts options
-	flag.StringVar(&opts.base, "base", "http://127.0.0.1:8787", "Serve origin")
-	flag.StringVar(&opts.session, "session", "", "session to bind; required if -binding is absent")
-	flag.StringVar(&opts.binding, "binding", "", "reopen an existing archive binding")
-	flag.StringVar(&opts.source, "source", "go-demo", "stable source identity for a new binding")
-	flag.StringVar(&opts.path, "file", "", "local encrypted archive filename (required)")
-	flag.IntVar(&opts.maxPages, "max-pages", 64, "maximum pages this run; rerun to continue")
+	bindFlags(flag.CommandLine, &opts)
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -52,6 +65,15 @@ func archiveKey() ([]byte, error) {
 func run(ctx context.Context, opts options) error {
 	if opts.path == "" || opts.session == "" && opts.binding == "" || opts.session != "" && opts.binding != "" || opts.maxPages < 1 || opts.maxPages > 1024 {
 		return errors.New("provide -file, exactly one of -session / -binding, and max-pages between 1 and 1024")
+	}
+	if opts.recoverAck != "" {
+		if opts.binding == "" {
+			return errors.New("recover-ack requires -binding for the existing archive binding")
+		}
+		info, err := os.Stat(opts.path)
+		if err != nil || !info.Mode().IsRegular() {
+			return errors.New("recover-ack requires an existing regular archive file; retain the original file and key")
+		}
 	}
 	key, err := archiveKey()
 	if err != nil {
@@ -116,6 +138,11 @@ func run(ctx context.Context, opts options) error {
 		return err
 	}
 	defer store.Close()
+	if opts.recoverAck != "" {
+		fmt.Println("Explicit ACK recovery: a confirmed stale revision may upgrade this archive to format v2; older SDKs cannot reopen it. Existing prepared recovery keeps its saved request identity. Keep the same file, key and recovery ID if interrupted.")
+		result, err := archive.RecoverPending(ctx, client, store, opts.recoverAck)
+		return showRecoveryResult(os.Stdout, result, err)
+	}
 	for page := 0; page < opts.maxPages; page++ {
 		request, err := demoutil.RequestID()
 		if err != nil {
@@ -132,4 +159,15 @@ func run(ctx context.Context, opts options) error {
 		}
 	}
 	return errors.New("page limit reached; rerun with the same binding, file and key to continue")
+}
+
+func showRecoveryResult(output io.Writer, result archive.SyncResult, err error) error {
+	if err != nil {
+		return err
+	}
+	if !result.Recovered || result.Receipt == nil || result.Receipt.State != "completed" {
+		return archive.ErrReceipt
+	}
+	_, err = fmt.Fprintf(output, "pending ACK confirmed; receipt request: %s\nRecovery-only run ended; rerun without -recover-ack to synchronize remaining pages.\n", demoutil.Text(result.Receipt.Request.RequestID))
+	return err
 }

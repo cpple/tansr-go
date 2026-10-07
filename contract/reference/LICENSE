@@ -1,0 +1,14 @@
+Tansr Proprietary License
+
+Copyright (c) 2026 Tansr (tansr.com). All rights reserved.
+
+This repository contains proprietary software. Except for the packages that
+carry their own LICENSE file granting different terms (currently
+packages/protocol, packages/sdk and packages/api-client, which are licensed
+under the MIT License), no part of this software may be used, copied, modified,
+merged, published, distributed, sublicensed, or sold without a prior written
+commercial agreement with the copyright holder.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.

@@ -73,13 +73,23 @@ func receiptFor(t *testing.T, id Identity, ack Ack) MutationReceipt {
 	}
 	return MutationReceipt{Protocol: Protocol, Request: ack.Request, BindingID: ack.BindingID, Operation: "archive-ack", SemanticDigest: domainDigest("tansr.sdk2.operation.v1", data), State: "completed", Revision: strconv.FormatInt(seq(ack.ExpectedRevision)+1, 10), OutcomeRef: "receipt-1"}
 }
+func archiveTempDir(t *testing.T) string {
+	t.Helper()
+	// macOS may expose TMPDIR through /var -> /private/var. Resolve only this
+	// test-owned directory; the store still rejects symlink parent paths.
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
 func openFixture(t *testing.T, b Binding, status Status) (*FileStore, StoreOptions) {
 	t.Helper()
 	id, err := IdentityFrom(b, status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := StoreOptions{Path: filepath.Join(t.TempDir(), "archive.bin"), Key: bytes.Repeat([]byte{7}, 32), Identity: id, CheckAccess: func(got Identity) error {
+	options := StoreOptions{Path: filepath.Join(archiveTempDir(t), "archive.bin"), Key: bytes.Repeat([]byte{7}, 32), Identity: id, CheckAccess: func(got Identity) error {
 		if got != id {
 			return ErrIntegrity
 		}
@@ -544,7 +554,7 @@ func TestStoreTamperAndCapacityFailClosed(t *testing.T) {
 	if _, err = OpenFileStore(options); !errors.Is(err, ErrIntegrity) {
 		t.Fatal("tampered encrypted file accepted", err)
 	}
-	options.Path = filepath.Join(t.TempDir(), "small.bin")
+	options.Path = filepath.Join(archiveTempDir(t), "small.bin")
 	options.Limits = StoreLimits{1, 1, 1024, 1024}
 	small, err := OpenFileStore(options)
 	if err != nil {

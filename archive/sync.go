@@ -15,6 +15,15 @@ func SyncOnce(ctx context.Context, client *Client, store Store, requestID string
 	if err := store.CheckAccess(); err != nil {
 		return result, err
 	}
+	if recovery, ok := store.(RecoveryStore); ok {
+		intent, err := recovery.PendingRebase()
+		if err != nil {
+			return result, err
+		}
+		if intent != nil {
+			return resumeRebase(ctx, client, recovery, *intent)
+		}
+	}
 	limits, err := defaultLimits(store.StorageLimits())
 	if err != nil {
 		return result, err
