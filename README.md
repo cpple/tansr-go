@@ -26,7 +26,21 @@ Go SDK for Tansr Serve. The client stays lightweight: Serve owns the agent loop,
 
 ## 快速开始
 
-在你的 Go 项目中安装固定版本；三个 Demo 也可以直接安装为命令：
+SDK 直接通过 **Go Modules** 集成到业务项目。已有项目可以执行 `go get github.com/cpple/tansr-go@v0.2.0`，也可以在 `go.mod` 中声明固定版本：
+
+```go
+module example.com/my-agent-app
+
+go 1.25
+
+require github.com/cpple/tansr-go v0.2.0
+```
+
+业务代码按需导入 `github.com/cpple/tansr-go/api`、`github.com/cpple/tansr-go/session` 等包，再运行 `go mod tidy`。提交业务项目的 `go.mod` 和生成的 `go.sum`；尚未在代码中使用的依赖会被 `tidy` 移除。SDK 安装不需要检出本仓、下载 Release 附件或使用本地 `replace`。本机 Go 应用通过 HTTP / SSE 连接单独部署的 Serve。
+
+从空项目到流式会话的完整程序见 [Go 开发手册](doc/Go开发手册.md)；显式业务工具、分块输出、加密档案与 ACK 恢复见 [Go 工具与档案接入](doc/Go工具与档案接入.md)。两个手册以已发布的 **v0.2.0** 为准，API 符号索引见 [pkg.go.dev](https://pkg.go.dev/github.com/cpple/tansr-go@v0.2.0)。
+
+三个 Demo 也可以直接安装为命令：
 
 ```sh
 go get github.com/cpple/tansr-go@v0.2.0
@@ -153,7 +167,7 @@ if err != nil { return err }
 
 `*api.APIError` 使用 19 个统一码（`Code`）与 6 个重试动作（`RetryAction`）；原族码在 `Detail.DomainCode`。`errors.Is(err, &api.APIError{Code: api.CodeNotFound})` 只比较统一码。`result_unknown` 应查询原操作，不能换 requestId 重发。
 
-`api.CallOptions` 提供 `IdempotencyKey`、`IfMatch`、`Deadline`；`Meta.ETag` 只接受强 revision。`IfMatch` 仅限 manifest 声明支持的操作，截止时间不会因为重试自动延长。`session.WriteOptions` 暴露幂等键与截止时间；高层会话写入会刷新能力围栏，不缓存旧授权决定。
+`api.CallOptions` 提供 `IdempotencyKey`、`IfMatch`、`Deadline`；`Meta.ETag` 只接受强 revision。`IfMatch` 仅限 manifest 声明支持的操作，截止时间不会因为重试自动延长。`session.WriteOptions` 暴露幂等键与截止时间；受围栏约束的高层会话内写操作会先刷新能力围栏，不缓存旧授权决定。`Close` 也支持休眠或已结束会话，因此不要求活体围栏，仍由 Serve 核对归属及关闭语义。
 
 ## 合同纪律
 
@@ -166,6 +180,8 @@ if err != nil { return err }
 7. 不手写路径，不修改冻结合同来适配客户端。
 
 ## Verification / English quick start
+
+Integrate directly through Go Modules: add `require github.com/cpple/tansr-go v0.2.0` to your application's `go.mod`, import the `api` / `session` packages you use, then run `go mod tidy`. Commit `go.mod` and `go.sum`. No local `replace`, source checkout or release attachment is required. The [developer guide](doc/Go开发手册.md) contains a complete streaming client; the [tools and archive guide](doc/Go工具与档案接入.md) covers durable execution, storage and ACK recovery. Both describe v0.2.0; Serve is deployed separately.
 
 Install the SDK with `go get github.com/cpple/tansr-go@v0.2.0`, or install a demo with `go install github.com/cpple/tansr-go/examples/go-chat@v0.2.0`. Go 1.25+ is required. Set `TANSR_TOKEN_FILE` to a short-lived end-user token, then run `go-chat -base http://127.0.0.1:8787` (or `go run ./examples/go-chat` from a source checkout). Omit `-message` for interactive chat; use `-resume SESSION_ID` to continue the same session. Approval is always manual. `go-tools` demonstrates an explicitly bound read-only order lookup and requires both controller and executor operations. An executor-only host must configure `RunnerOptions.Status` using `Client.ExecutorStatus` after a controller establishes the terminal binding. `go-archive` requires a host-managed encryption key and an archive-enabled Serve; custom durable storage implements `archive.Store`. The demos do not promise all Node/Electron capabilities or silently switch session families.
 
