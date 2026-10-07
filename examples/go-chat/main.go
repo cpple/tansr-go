@@ -1,9 +1,4 @@
-// Command go-chat is the smallest end-to-end walk over the unified /api contract with the Go SDK:
-// discover → create a session → read its capability closure → send one message → read the event
-// stream until a terminal event → close the session. Every request goes through package api by
-// operation name; this file contains no URL path.
-//
-//	go run ./examples/go-chat -base http://127.0.0.1:8787 -token "$TANSR_TOKEN" -message "hello"
+// Command go-chat owns presentation; Serve owns the agent loop and context.
 package main
 
 import (
@@ -13,159 +8,154 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"strconv"
 	"time"
 
-	"github.com/cpple/tansr-go/api"
+	"github.com/cpple/tansr-go/examples/internal/demoutil"
+	"github.com/cpple/tansr-go/session"
 )
 
-func main() {
-	base := flag.String("base", "http://127.0.0.1:8787", "Serve origin (http(s)://host[:port])")
-	token := flag.String("token", os.Getenv("TANSR_TOKEN"), "bearer token (or TANSR_TOKEN)")
-	message := flag.String("message", "hello", "message text to send")
-	timeout := flag.Duration("timeout", 60*time.Second, "overall deadline")
-	flag.Parse()
+type options struct {
+	base, resume, model, message string
+	timeout                      time.Duration
+	close                        bool
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
-	if err := run(ctx, *base, *token, *message); err != nil {
-		fmt.Fprintln(os.Stderr, "go-chat:", err)
+func main() {
+	var opts options
+	flag.StringVar(&opts.base, "base", "http://127.0.0.1:8787", "Serve origin")
+	flag.StringVar(&opts.resume, "resume", "", "resume the same session, never create a replacement")
+	flag.StringVar(&opts.model, "model", "", "model for a new session; application policy applies")
+	flag.StringVar(&opts.message, "message", "", "one turn; omit for interactive multi-turn chat")
+	flag.DurationVar(&opts.timeout, "timeout", 10*time.Minute, "overall deadline, 0 disables it")
+	flag.BoolVar(&opts.close, "close", false, "close on exit; default preserves the session for resume")
+	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	if opts.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.timeout)
+		defer cancel()
+	}
+	if err := run(ctx, opts, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "go-chat:", demoutil.Text(demoutil.Describe(err).Error()))
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, base, token, message string) error {
-	client, err := api.New(api.Options{BaseURL: base, Token: token, EventEnvelope: true})
+func run(ctx context.Context, opts options, input io.Reader, out io.Writer) (runErr error) {
+	transport, err := demoutil.Client(opts.base)
 	if err != nil {
 		return err
 	}
-
-	// 1. Discover: the manifest revision is observed, never used to switch behaviour.
-	manifest, err := client.Manifest(ctx)
+	client, err := session.New(transport)
 	if err != nil {
-		return describe(err)
+		return err
 	}
-	fmt.Printf("manifest revision %d (locked %d), %d operations\n", manifest.Body.Revision, api.ManifestRevision, len(manifest.Body.Operations))
-	caps, err := client.Capabilities(ctx)
+	var current *session.Session
+	if opts.resume != "" {
+		current, err = client.Resume(ctx, opts.resume)
+	} else {
+		current, err = client.Create(ctx, session.CreateOptions{Model: opts.model})
+	}
 	if err != nil {
-		return describe(err)
+		return err
 	}
-	if !caps.Body.Domains.Session.Installed {
-		return errors.New("this deployment has no session domain installed")
+	fmt.Fprintln(out, "session:", demoutil.Text(current.ID()))
+	if opts.close {
+		defer func() {
+			end, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := current.Close(end, session.WriteOptions{}); err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("session close failed: %w", err))
+			}
+		}()
 	}
-
-	// 2. Create a session (agent-session-v1, plain JSON body).
-	created, err := client.Call(ctx, api.OpSessionCreate, api.CallOptions{Body: map[string]any{}})
+	meta, err := current.Meta(ctx)
 	if err != nil {
-		return describe(err)
+		return err
 	}
-	var session struct {
-		ID string `json:"id"`
+	if meta.Status == "ended" || !meta.Live {
+		return errors.New("session is not live after resume")
 	}
-	if err := created.Decode(&session); err != nil || session.ID == "" {
-		return fmt.Errorf("session.create returned no id: %v", err)
+	if meta.Status == "running" && opts.message != "" {
+		return errors.New("session has a running turn; resume without -message to observe or cancel it")
 	}
-	fmt.Printf("session %s created (http %d)\n", session.ID, created.Status)
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := client.Call(closeCtx, api.OpSessionClose, api.CallOptions{Params: map[string]string{"id": session.ID}}); err != nil {
-			fmt.Fprintln(os.Stderr, "session.close:", describe(err))
-		}
-	}()
-
-	// 3. Read the capability closure and check the fence before writing.
-	closure, err := client.SessionCapabilities(ctx, session.ID)
+	// Old control frames may replay when resuming a running turn. Its metadata
+	// sequence is the floor: an old turn.completed must not finish this turn.
+	cursor := strconv.FormatInt(meta.LastSeq, 10)
+	if meta.Status == "running" {
+		cursor = "0"
+	}
+	reading, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stream, err := current.Events(reading, cursor)
 	if err != nil {
-		return describe(err)
-	}
-	if state := closure.Closure.Operations[api.OpSessionMessageSend]; state != api.StateEnabled {
-		return fmt.Errorf("%s is %s for this session", api.OpSessionMessageSend, state)
-	}
-
-	// 4. Open the event stream first (negotiated envelope), then send the message with the closure id.
-	stream, err := client.Events(ctx, api.OpSessionEventsObserve, api.EventsOptions{Params: map[string]string{"id": session.ID}})
-	if err != nil {
-		return describe(err)
+		return err
 	}
 	defer stream.Close()
-	accepted, err := client.Call(ctx, api.OpSessionMessageSend, api.CallOptions{
-		Params:         map[string]string{"id": session.ID},
-		Body:           map[string]any{"text": message},
-		ClosureID:      closure.ClosureID,
-		IdempotencyKey: fmt.Sprintf("go-chat-%d", time.Now().UnixNano()),
-	})
-	if err != nil {
-		return describe(err)
-	}
-	fmt.Printf("message accepted (http %d) — acceptance is not completion\n", accepted.Status)
-
-	// 5. Read frames until a terminal event; EOF alone is not completion.
-	for {
-		frame, err := stream.Next()
-		if err == io.EOF {
-			return errors.New("stream ended without a terminal event (EOF ≠ completion)")
+	events := make(chan eventResult, 16)
+	go func() {
+		defer close(events)
+		for {
+			event, err := stream.Next()
+			select {
+			case events <- eventResult{event: event, err: err}:
+			case <-reading.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
 		}
+	}()
+	write := func(action func(context.Context, session.WriteOptions) error) error {
+		key, err := demoutil.RequestID()
 		if err != nil {
-			return describe(err)
+			return err
 		}
-		env := frame.Envelope
-		eventType := "<unknown>"
-		if env.Type != nil {
-			eventType = *env.Type
-		}
-		fmt.Printf("event %s domain=%s cursor=%s raw=%s\n", eventType, env.Domain, cursorText(env), truncate(string(env.Raw), 120))
-		if env.IsTerminal() {
-			fmt.Printf("terminal status: %s\n", *env.TerminalStatus)
-			return nil
-		}
+		fmt.Fprintln(out, "request:", key)
+		request, done := context.WithTimeout(ctx, 30*time.Second)
+		defer done()
+		deadline, _ := request.Deadline()
+		return action(request, session.WriteOptions{IdempotencyKey: key, Deadline: deadline})
 	}
-}
-
-func cursorText(env *api.EventEnvelope) string {
-	if text, ok := env.CursorSet.EventCursor.Text(); ok {
-		return text
+	hooks := chatHooks{
+		send: func(call context.Context, text string) (int64, error) {
+			before, err := current.Meta(call)
+			if err != nil {
+				return 0, err
+			}
+			if before.Status != "idle" {
+				return 0, errors.New("session is not idle; wait or /cancel")
+			}
+			err = write(func(request context.Context, opts session.WriteOptions) error {
+				_, err := current.Send(request, text, opts)
+				return err
+			})
+			return before.LastSeq, err
+		},
+		interrupt: func(call context.Context) error {
+			request, cancel := context.WithTimeout(call, 5*time.Second)
+			defer cancel()
+			_, err := current.Interrupt(request, session.WriteOptions{})
+			return err
+		},
+		permission: func(_ context.Context, ticket, digest, verdict string) error {
+			return write(func(request context.Context, opts session.WriteOptions) error {
+				_, err := current.Permission(request, ticket, digest, verdict, opts)
+				return err
+			})
+		},
+		answer: func(_ context.Context, ticket string, answers []session.Answer) error {
+			return write(func(request context.Context, opts session.WriteOptions) error {
+				_, err := current.Answer(request, ticket, answers, opts)
+				return err
+			})
+		},
 	}
-	return "-"
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
-
-// describe renders the error surface without echoing tokens or bodies. The unified code decides the
-// branch (plan D19: one `switch code` across every tansr SDK); the family code is only shown as detail.
-func describe(err error) error {
-	var apiErr *api.APIError
-	var domainErr *api.DomainError
-	var clientErr *api.ClientError
-	switch {
-	case errors.Is(err, api.ErrContractUnavailable):
-		return fmt.Errorf("unified contract unavailable — this is not a unified-v1 Serve; the SDK does not fall back to legacy paths: %w", err)
-	case errors.Is(err, api.ErrEnvelopeNotNegotiated):
-		return fmt.Errorf("server did not echo the event envelope negotiation: %w", err)
-	case errors.As(err, &apiErr):
-		advice := api.Advice(apiErr)
-		hint := ""
-		switch apiErr.Code {
-		case api.CodeCapabilityUnavailable:
-			hint = " — not installed or outside the closure on this deployment; nothing to fall back to"
-		case api.CodePreconditionFailed:
-			hint = " — re-read (closure / resource revision) before writing again"
-		case api.CodeResultUnknown:
-			hint = " — side effect unknown: query the receipt, never replay with a new key"
-		}
-		detail := ""
-		if apiErr.Detail.Present() {
-			detail = fmt.Sprintf(" [reason=%q domainCode=%q]", apiErr.Detail.Reason, apiErr.Detail.DomainCode)
-		}
-		return fmt.Errorf("%w (retryAction %s, replayable %v)%s%s", apiErr, advice.Action, advice.Replayable, detail, hint)
-	case errors.As(err, &domainErr):
-		return fmt.Errorf("%w (unwrapped family envelope, retryAction %q → %s)", domainErr, domainErr.RetryAction, api.Advice(domainErr).Action)
-	case errors.As(err, &clientErr):
-		return fmt.Errorf("local: %w", clientErr)
-	}
-	return err
+	fmt.Fprintln(out, "Commands: /cancel, /allow <ticket>, /deny <ticket>, /answers <ticket> <JSON array>, /quit")
+	fmt.Fprintln(out, "No approval is automatic. Type a message while idle to start a new turn.")
+	return chatLoop(ctx, hooks, readLines(reading, input), events, out, opts.message, meta.Status == "running", meta.LastSeq)
 }

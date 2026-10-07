@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync"
+	"sync/atomic"
 
 	"github.com/cpple/tansr-go/sse"
 )
@@ -40,7 +42,10 @@ type Stream struct {
 	reader     *sse.Reader
 	cancel     context.CancelFunc
 	ctx        context.Context
-	done       bool
+	done       atomic.Bool
+	nextMu     sync.Mutex
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 // Meta returns the unified headers of the stream response.
@@ -51,27 +56,34 @@ func (s *Stream) LastEventID() string { return s.reader.LastEventID() }
 
 // Close releases the connection. It is safe to call more than once.
 func (s *Stream) Close() error {
-	s.done = true
-	s.cancel()
-	return s.body.Close()
+	s.closeOnce.Do(func() {
+		s.done.Store(true)
+		s.cancel()
+		s.closeErr = s.body.Close()
+	})
+	return s.closeErr
 }
 
 // Next returns the next frame, io.EOF at a clean end of stream, or an error. In negotiated mode pure
 // transport hint frames (no id, no event, empty data) are skipped and every other frame must decode
 // as an EventEnvelope (malformed → *ClientError CodeInvalidEnvelope; the stream is then unusable).
 func (s *Stream) Next() (*Frame, error) {
-	if s.done {
+	s.nextMu.Lock()
+	defer s.nextMu.Unlock()
+	if s.done.Load() {
 		return nil, io.EOF
 	}
 	for {
 		ev, err := s.reader.Next()
 		if err != nil {
-			s.done = true
+			// Capture the caller/Close cancellation before our own cleanup cancels the context.
+			ctxErr := s.ctx.Err()
+			_ = s.Close()
 			switch {
+			case ctxErr != nil:
+				return nil, wrapClientError(CodeAborted, "", ctxErr)
 			case err == io.EOF:
 				return nil, io.EOF
-			case s.ctx.Err() != nil:
-				return nil, wrapClientError(CodeAborted, "", s.ctx.Err())
 			case errors.Is(err, sse.ErrFrameTooLarge):
 				return nil, wrapClientError(CodePayloadTooLarge, "", err)
 			case errors.Is(err, sse.ErrTruncated), errors.Is(err, sse.ErrInvalidUTF8):
@@ -89,7 +101,7 @@ func (s *Stream) Next() (*Frame, error) {
 		}
 		envelope, err := ParseEventEnvelope([]byte(ev.Data))
 		if err != nil {
-			s.done = true
+			_ = s.Close()
 			return nil, err
 		}
 		frame.Envelope = envelope

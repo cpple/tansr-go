@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -59,7 +60,9 @@ type Reader struct {
 	src    *bufio.Reader
 	opts   Options
 	lastID string
+	idMu   sync.RWMutex
 	done   bool
+	skipLF bool // a CR already ended the previous line; consume an optional following LF
 
 	// current frame
 	seen    bool
@@ -81,7 +84,11 @@ func NewReader(r io.Reader, opts Options) *Reader {
 
 // LastEventID returns the most recent `id:` value seen (the value to send as Last-Event-ID when
 // resuming). It changes only through id fields; it is not advanced by EOF or by any other cursor.
-func (r *Reader) LastEventID() string { return r.lastID }
+func (r *Reader) LastEventID() string {
+	r.idMu.RLock()
+	defer r.idMu.RUnlock()
+	return r.lastID
+}
 
 // Next returns the next dispatched frame. It returns io.EOF after the stream ended cleanly.
 //
@@ -163,13 +170,15 @@ func (r *Reader) Next() (*Event, error) {
 func (r *Reader) dispatch() (*Event, error) {
 	ev := &Event{ID: r.id, HasID: r.hasID, Event: r.event, Data: string(r.data)}
 	hasData := r.hasData
-	if r.hasID {
-		r.lastID = r.id
-	}
 	r.seen, r.hasData, r.data, r.event, r.id, r.hasID, r.size = false, false, r.data[:0], "", "", false, 0
 	if !utf8.ValidString(ev.Data) || !utf8.ValidString(ev.Event) || !utf8.ValidString(ev.ID) {
 		r.done = true
 		return nil, ErrInvalidUTF8
+	}
+	if ev.HasID {
+		r.idMu.Lock()
+		r.lastID = ev.ID
+		r.idMu.Unlock()
 	}
 	if !hasData {
 		return nil, nil
@@ -205,13 +214,19 @@ func (r *Reader) readLine() (line []byte, eof bool, err error) {
 			}
 			return nil, false, rerr
 		}
+		if r.skipLF {
+			r.skipLF = false
+			if b == '\n' {
+				continue
+			}
+		}
 		switch b {
 		case '\n':
 			return buf, false, nil
 		case '\r':
-			if next, perr := r.src.Peek(1); perr == nil && next[0] == '\n' {
-				_, _ = r.src.ReadByte()
-			}
+			// A CR is already a complete line ending. Looking ahead here blocks
+			// delivery of a complete CR-delimited frame on a still-open stream.
+			r.skipLF = true
 			return buf, false, nil
 		}
 		buf = append(buf, b)

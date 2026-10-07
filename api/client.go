@@ -38,7 +38,8 @@ var (
 type Options struct {
 	// BaseURL is the Serve origin only: http(s)://host[:port] without path, query or credentials.
 	BaseURL string
-	// HTTPClient is injected for transport control (defaults to a client that refuses redirects).
+	// HTTPClient is injected for transport control. New copies it and refuses redirects on the
+	// copy, preserving the caller's client and the fixed Serve origin for authenticated requests.
 	HTTPClient *http.Client
 	// Token is the bearer token; TokenFunc is consulted per request instead when set. Short-lived
 	// tickets are expected — do not embed long-term application secrets in terminals.
@@ -136,9 +137,12 @@ func New(opts Options) (*Client, error) {
 	if c.now == nil {
 		c.now = time.Now
 	}
-	if c.http == nil {
-		c.http = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect }}
+	httpClient := http.Client{}
+	if c.http != nil {
+		httpClient = *c.http
 	}
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return errRedirect }
+	c.http = &httpClient
 	if c.maxResponse == 0 {
 		c.maxResponse = DefaultMaxResponseBytes
 	}

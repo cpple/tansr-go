@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -68,8 +69,12 @@ func Validate(definition string, value any) error {
 
 // DecodeJSON decodes data into a generic tree (map[string]any, []any, json.Number, string, bool, nil)
 // with numbers kept as json.Number so that integers are never rounded through float64. Trailing data
-// is rejected.
+// is rejected. Like the unified Node client, UTF-8 is strict and decoded values
+// are bounded to depth 64 and 200,000 nodes. Family control JSON uses canonical instead.
 func DecodeJSON(data []byte) (any, error) {
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("JSON is not valid UTF-8")
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var value any
@@ -78,6 +83,37 @@ func DecodeJSON(data []byte) (any, error) {
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return nil, fmt.Errorf("trailing data after JSON value")
+	}
+	nodes := 0
+	var visit func(any, int) error
+	visit = func(entry any, depth int) error {
+		nodes++
+		if depth > 64 || nodes > 200000 {
+			return fmt.Errorf("JSON depth or node limit exceeded")
+		}
+		switch v := entry.(type) {
+		case map[string]any:
+			for _, child := range v {
+				if err := visit(child, depth+1); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range v {
+				if err := visit(child, depth+1); err != nil {
+					return err
+				}
+			}
+		case json.Number:
+			n, err := v.Float64()
+			if err != nil || math.IsInf(n, 0) || math.IsNaN(n) {
+				return fmt.Errorf("JSON contains a non-finite number")
+			}
+		}
+		return nil
+	}
+	if err := visit(value, 0); err != nil {
+		return nil, err
 	}
 	return value, nil
 }

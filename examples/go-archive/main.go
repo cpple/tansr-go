@@ -1,0 +1,135 @@
+// Command go-archive demonstrates explicit archive binding, verified downloads,
+// encrypted local persistence and ACK after durability. It is not a context manager.
+package main
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"time"
+
+	"github.com/cpple/tansr-go/archive"
+	"github.com/cpple/tansr-go/examples/internal/demoutil"
+)
+
+type options struct {
+	base, session, binding, source, path string
+	maxPages                             int
+}
+
+func main() {
+	var opts options
+	flag.StringVar(&opts.base, "base", "http://127.0.0.1:8787", "Serve origin")
+	flag.StringVar(&opts.session, "session", "", "session to bind; required if -binding is absent")
+	flag.StringVar(&opts.binding, "binding", "", "reopen an existing archive binding")
+	flag.StringVar(&opts.source, "source", "go-demo", "stable source identity for a new binding")
+	flag.StringVar(&opts.path, "file", "", "local encrypted archive filename (required)")
+	flag.IntVar(&opts.maxPages, "max-pages", 64, "maximum pages this run; rerun to continue")
+	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	if err := run(ctx, opts); err != nil {
+		fmt.Fprintln(os.Stderr, "go-archive:", demoutil.Text(demoutil.Describe(err).Error()))
+		os.Exit(1)
+	}
+}
+
+func archiveKey() ([]byte, error) {
+	key, err := hex.DecodeString(os.Getenv("TANSR_ARCHIVE_KEY"))
+	if err != nil || len(key) != 32 {
+		return nil, errors.New("TANSR_ARCHIVE_KEY must contain a 32-byte key encoded as 64 hex characters")
+	}
+	return key, nil
+}
+
+func run(ctx context.Context, opts options) error {
+	if opts.path == "" || opts.session == "" && opts.binding == "" || opts.session != "" && opts.binding != "" || opts.maxPages < 1 || opts.maxPages > 1024 {
+		return errors.New("provide -file, exactly one of -session / -binding, and max-pages between 1 and 1024")
+	}
+	key, err := archiveKey()
+	if err != nil {
+		return err
+	}
+	defer clear(key)
+	path, err := filepath.Abs(opts.path)
+	if err != nil {
+		return err
+	}
+	// A host-selected private directory is required. On Windows, set its ACL
+	// for the current OS account; chmod bits alone do not provide that boundary.
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	transport, err := demoutil.Client(opts.base)
+	if err != nil {
+		return err
+	}
+	client := archive.NewClient(transport)
+	var binding archive.Binding
+	if opts.binding != "" {
+		binding, err = client.Binding(ctx, opts.binding)
+	} else {
+		target, readErr := client.BindingTarget(ctx, opts.session)
+		if readErr != nil {
+			return readErr
+		}
+		if target.BindingID != nil {
+			binding, err = client.Binding(ctx, *target.BindingID)
+		} else {
+			key, keyErr := demoutil.RequestID()
+			if keyErr != nil {
+				return keyErr
+			}
+			fmt.Println("binding request:", key)
+			binding, err = client.Create(ctx, opts.session, opts.source, key)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Println("binding:", demoutil.Text(binding.BindingID))
+	status, err := client.Status(ctx, binding.BindingID)
+	if err != nil {
+		return err
+	}
+	identity, err := archive.IdentityFrom(binding, status)
+	if err != nil {
+		return err
+	}
+	store, err := archive.OpenFileStore(archive.StoreOptions{Path: path, Key: key, Identity: identity,
+		CheckAccess: func(current archive.Identity) error {
+			// This short-lived CLI process pins its authenticated binding. An app
+			// must additionally consult its current login and revocation state.
+			if current != identity {
+				return archive.ErrIntegrity
+			}
+			return ctx.Err()
+		}})
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	for page := 0; page < opts.maxPages; page++ {
+		request, err := demoutil.RequestID()
+		if err != nil {
+			return err
+		}
+		result, err := archive.SyncOnce(ctx, client, store, request)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("page %d: %d verified records, complete=%v, recovered-pending-ack=%v\n", page+1, result.Records, result.Complete, result.Recovered)
+		if result.Complete {
+			fmt.Println("archive synchronized; persisted archive coverage is independent of SSE position")
+			return nil
+		}
+	}
+	return errors.New("page limit reached; rerun with the same binding, file and key to continue")
+}

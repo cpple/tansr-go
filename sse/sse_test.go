@@ -5,7 +5,47 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestCRFrameIsDeliveredWithoutWaitingForNextByte(t *testing.T) {
+	r, w := io.Pipe()
+	defer r.Close()
+	defer w.Close()
+	reader := NewReader(r, Options{StrictEOF: true})
+	done := make(chan error, 1)
+	go func() {
+		ev, err := reader.Next()
+		if err == nil && (ev.Data != "hello" || ev.ID != "7") {
+			err = errors.New("unexpected complete CR frame")
+		}
+		done <- err
+	}()
+	if _, err := io.WriteString(w, "id: 7\rdata: hello\r\r"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("complete frame waited for next byte on an open connection")
+	}
+}
+
+func TestInvalidFrameDoesNotReplaceLastEventID(t *testing.T) {
+	r := NewReader(strings.NewReader("id: confirmed\ndata: ok\n\nid: invalid\ndata: \xff\n\n"), Options{StrictEOF: true})
+	if _, err := r.Next(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Next(); !errors.Is(err, ErrInvalidUTF8) {
+		t.Fatalf("invalid frame accepted: %v", err)
+	}
+	if r.LastEventID() != "confirmed" {
+		t.Fatal("invalid frame replaced the last confirmed transport cursor")
+	}
+}
 
 func readAll(t *testing.T, input string, opts Options) ([]Event, error) {
 	t.Helper()

@@ -1,6 +1,15 @@
 # Changelog · tansr-go
 
-本仓无版本号 / 标签(由主线在收编时决定);条目按泳道登记。事实源对齐以 `contract/PROVENANCE.json` 为准。
+已有 `v0.1.0` 为原 UAPI 骨架；以下新增能力尚未打新标签。合同以 `contract/LOCK.json` 和 `contract/PROVENANCE.json` 为准。
+
+## 未发布 · GO-01（2026-10-07）
+
+- 冻结 SDK2/UAPI 消费基线：CLI `83c64b2c`、manifest r7、81 操作/11族、39份源与语义文件；增加只读 `contractcheck`，不修改协议或自动跟随上游。
+- 增加高层 `session`，支持会话、流式多轮、人工交互、插入输入、快照、压缩及原音频调用；完成、取消、会话结束与断流分开处理。
+- 将 `executor` / `archive` 的旧占位接口替换为真实冻结 DTO 和实现：显式业务工具及持久执行记录、输出分块、档案完整性与加密单端保存、耐久后 ACK 及待决恢复。占位接口不是已验证的 wire DTO，使用原接口的源码须按新类型迁移。
+- 三个独立命令行示例：`go-chat`、`go-tools`、`go-archive`；不开放任意 shell，不把单端档案能力宣称为 Node 全部记忆、同步与备份能力。
+- 修复注入 HTTPClient 后可跟随重定向、流读取与关闭竞态、异常/EOF未及时释放连接、完整 CR 帧等待下一字节；补统一 JSON 的 UTF-8 和有界解析检查。
+- 具体验收、真实 Serve 前置修复及发布状态见 `doc/GO-01-Go-SDK与Demo开发及验收.md`，不以本节代替验收结果。
 
 ## 未发布 · U8-GO(2026-10-03,对齐 tansr-cli main `64df76b2`,manifest revision 7)
 

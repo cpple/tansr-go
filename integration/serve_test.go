@@ -1,0 +1,616 @@
+package integration
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/cpple/tansr-go/api"
+	"github.com/cpple/tansr-go/archive"
+	"github.com/cpple/tansr-go/executor"
+	"github.com/cpple/tansr-go/session"
+)
+
+// 这些测试只有显式指定 CLI 工作区时运行，普通 Go 消费者不安装 Node。
+type fixture struct {
+	BaseURL               string          `json:"baseURL"`
+	Token                 string          `json:"token"`
+	ApplicationScopeID    string          `json:"applicationScopeId"`
+	EndUserID             string          `json:"endUserId"`
+	AuthorizationRevision string          `json:"authorizationRevision"`
+	DefinitionDigest      string          `json:"definitionDigest"`
+	Declaration           json.RawMessage `json:"declaration"`
+	ManifestRevision      int             `json:"manifestRevision"`
+}
+
+// loseAckResponse forwards the real request and drains its real success response,
+// then models a connection loss. It never fabricates a Serve response or receipt.
+type loseAckResponse struct{ lost atomic.Bool }
+
+func (l *loseAckResponse) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := http.DefaultTransport.RoundTrip(request)
+	if err != nil {
+		return nil, err
+	}
+	ack, _ := api.Lookup(api.OpArchiveAckCommit)
+	prefix, suffix, _ := strings.Cut(ack.Path, ":id")
+	if request.Method == ack.Method && strings.HasPrefix(request.URL.Path, prefix) && strings.HasSuffix(request.URL.Path, suffix) && response.StatusCode == http.StatusOK && l.lost.CompareAndSwap(false, true) {
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+		return nil, fmt.Errorf("synthetic acknowledgement response loss after Serve commit")
+	}
+	return response, nil
+}
+
+func startFixture(t *testing.T, mode string) fixture {
+	t.Helper()
+	cliRoot := os.Getenv("TANSR_GO_SERVE_CLI_ROOT")
+	if cliRoot == "" {
+		t.Skip("真实 Serve 集成需要 TANSR_GO_SERVE_CLI_ROOT 指向已安装依赖的 CLI 仓")
+	}
+	cliRoot, err := filepath.Abs(cliRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := os.Getenv("TANSR_GO_SERVE_NODE")
+	if node == "" {
+		node = "node"
+	}
+	script, err := filepath.Abs("serve-fixture.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	moduleURL := func(parts ...string) string {
+		p := filepath.ToSlash(filepath.Join(parts...))
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		return (&url.URL{Scheme: "file", Path: p}).String()
+	}
+	cmd := exec.CommandContext(ctx, node, "--import", moduleURL(cliRoot, "scripts", "inject-globals.mjs"),
+		"--import", moduleURL(cliRoot, "node_modules", "tsx", "dist", "loader.mjs"), script, cliRoot, t.TempDir(), mode)
+	cmd.Dir = cliRoot
+	stderr := new(bytes.Buffer)
+	cmd.Stderr = stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	ready := make(chan fixture, 1)
+	scanDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "TANSR_GO_FIXTURE ") {
+				var f fixture
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "TANSR_GO_FIXTURE ")), &f); err != nil {
+					scanDone <- err
+					return
+				}
+				ready <- f
+			}
+		}
+		scanDone <- scanner.Err()
+	}()
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		_, _ = io.WriteString(stdin, "stop\n")
+		_ = stdin.Close()
+		select {
+		case err := <-waited:
+			if err != nil {
+				t.Errorf("Serve fixture exit: %v\n%s", err, stderr.String())
+			}
+		case <-time.After(15 * time.Second):
+			cancel()
+			<-waited
+			t.Errorf("Serve fixture did not stop gracefully\n%s", stderr.String())
+		}
+		cancel()
+	})
+	select {
+	case f := <-ready:
+		if f.ManifestRevision != api.ManifestRevision {
+			t.Fatalf("Serve manifest %d != frozen SDK %d", f.ManifestRevision, api.ManifestRevision)
+		}
+		return f
+	case err := <-scanDone:
+		t.Fatalf("Serve fixture exited before ready: %v", err)
+	case <-time.After(60 * time.Second):
+		t.Fatal("Serve fixture startup timed out")
+	}
+	return fixture{}
+}
+
+func clientFor(t *testing.T, f fixture) *api.Client {
+	return clientForFamily(t, f, "sdk1")
+}
+
+func clientForFamily(t *testing.T, f fixture, family string) *api.Client {
+	t.Helper()
+	c, err := api.New(api.Options{BaseURL: f.BaseURL, Token: f.Token, SessionFamily: family, EventEnvelope: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestRealServeExecutorClient(t *testing.T) {
+	f := startFixture(t, "execution")
+	c := clientFor(t, f)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	sessions, err := session.New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := sessions.Create(ctx, session.CreateOptions{ClientTools: []json.RawMessage{f.Declaration}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background(), session.WriteOptions{})
+	x, err := executor.NewClient(c, executor.Scope{ApplicationScopeID: f.ApplicationScopeID, EndUserID: f.EndUserID, AuthorizationRevision: f.AuthorizationRevision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform := executor.CurrentPlatform()
+	workspace := executor.Workspace{WorkspaceID: "go-business-workspace", Revision: "1"}
+	journal, err := executor.NewFileJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	var executions atomic.Int32
+	runner, err := executor.NewRunner(executor.RunnerOptions{Client: x, Journal: journal,
+		Registration: executor.Registration{Protocol: executor.Protocol, ExecutorID: "go-executor", Platform: platform,
+			Workspaces: []executor.Workspace{workspace}, Operations: []string{"tool.invoke"}, Tools: []executor.ToolDefinition{{Name: "BusinessLookup", DefinitionDigest: f.DefinitionDigest}}},
+		Authorize: func(_ context.Context, operation executor.Operation) error {
+			if operation.SessionID != s.ID() || operation.Scope != x.Scope() || operation.Binding.Target.WorkspaceID != workspace.WorkspaceID {
+				return fmt.Errorf("unexpected local execution identity")
+			}
+			return nil
+		},
+		Tools: map[string]executor.Tool{"BusinessLookup": {DefinitionDigest: f.DefinitionDigest, Handle: func(context.Context, map[string]any) (any, error) {
+			executions.Add(1)
+			return map[string]any{"status": "ok", "content": []any{map[string]any{"t": "text", "text": "go-terminal-fact"}}}, nil
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := runner.Connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err = x.Heartbeat(ctx, connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closure, err := s.Capabilities(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps, err := x.Initialize(ctx, s.ID(), platform, []string{"BusinessLookup"}, closure.ClosureID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closure, err = s.Capabilities(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps, err = x.Bind(ctx, s.ID(), connection, workspace, caps.CapabilityRevision, closure.ClosureID)
+	if err != nil || caps.Binding == nil {
+		t.Fatalf("bind: %+v %v", caps, err)
+	}
+	stream, err := s.Events(ctx, fmt.Sprint(s.Created().LastSeq))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if _, err = s.Send(ctx, "GO-TOOL", session.WriteOptions{IdempotencyKey: "go-executor-message"}); err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 1)
+	go func() {
+		for {
+			event, err := stream.Next()
+			if err != nil {
+				results <- err
+				return
+			}
+			if event.Type == "server.permission.request" {
+				var permission struct {
+					RequestID string `json:"requestId"`
+					Digest    string `json:"digest"`
+				}
+				if err = json.Unmarshal(event.Raw, &permission); err != nil {
+					results <- err
+					return
+				}
+				if _, err = s.Permission(ctx, permission.RequestID, permission.Digest, "allow", session.WriteOptions{IdempotencyKey: "go-executor-approval"}); err != nil {
+					results <- err
+					return
+				}
+			}
+			if outcome, done := event.TurnOutcome(); done {
+				if outcome.Status != session.OutcomeCompleted {
+					results <- fmt.Errorf("tool turn: %+v", outcome)
+				} else {
+					results <- nil
+				}
+				return
+			}
+		}
+	}()
+	var operation executor.Operation
+	for operation.OperationID == "" {
+		batch, err := x.Poll(ctx, connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(batch.Operations) > 1 {
+			t.Fatalf("unexpected operations: %+v", batch)
+		}
+		if len(batch.Operations) == 1 {
+			operation = batch.Operations[0]
+			break
+		}
+		select {
+		case err := <-results:
+			t.Fatalf("turn ended without executor operation: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if operation.ToolName != "BusinessLookup" || operation.Request.Operation != "tool.invoke" {
+		t.Fatalf("wrong device dispatch: %+v", operation)
+	}
+	receipt, err := runner.Execute(ctx, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := runner.Execute(ctx, operation)
+	if err != nil || executions.Load() != 1 || replayed.OperationID != receipt.OperationID || replayed.Digest != receipt.Digest {
+		t.Fatalf("local durable replay: executions=%d receipt=%+v err=%v", executions.Load(), replayed, err)
+	}
+	for i := 0; i < 2; i++ {
+		status, err := x.Submit(ctx, operation, receipt)
+		if err != nil || status.Status != "completed" {
+			t.Fatalf("receipt %d: %+v %v", i, status, err)
+		}
+	}
+	select {
+	case err := <-results:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	history, err := s.History(ctx, 0, 20)
+	if err != nil || !bytes.Contains(history, []byte("go-tool-complete")) {
+		t.Fatalf("tool history: %s %v", history, err)
+	}
+}
+
+func TestRealServeArchiveClient(t *testing.T) {
+	for _, family := range []string{"sdk1", "sdk2-offload-v1"} {
+		t.Run(family, func(t *testing.T) {
+			mode := "archive"
+			if family == "sdk2-offload-v1" {
+				mode = "archive-offload"
+			}
+			f := startFixture(t, mode)
+			loss := &loseAckResponse{}
+			c, err := api.New(api.Options{BaseURL: f.BaseURL, Token: f.Token, SessionFamily: family,
+				EventEnvelope: true, HTTPClient: &http.Client{Transport: loss}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			sessions, err := session.New(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			create := session.CreateOptions{}
+			if family == "sdk2-offload-v1" {
+				create.RequestID = "go-archive-create"
+			}
+			s, err := sessions.Create(ctx, create)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close(context.Background(), session.WriteOptions{})
+			stream, err := s.Events(ctx, fmt.Sprint(s.Created().LastSeq))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			a := archive.NewClient(c)
+			target, err := a.BindingTarget(ctx, s.ID())
+			if err != nil || target.BindingID == nil {
+				t.Fatalf("archive binding target: %+v %v", target, err)
+			}
+			binding, err := a.Binding(ctx, *target.BindingID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, err := a.Status(ctx, binding.BindingID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity, err := archive.IdentityFrom(binding, status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := make([]byte, 32)
+			if _, err = rand.Read(key); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "terminal.archive")
+			options := archive.StoreOptions{Path: path, Key: key, Identity: identity, CheckAccess: func(got archive.Identity) error {
+				if got != identity || got.ApplicationScopeID != f.ApplicationScopeID || got.EndUserID != f.EndUserID {
+					return fmt.Errorf("unexpected archive identity")
+				}
+				return nil
+			}}
+			store, err := archive.OpenFileStore(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = store.Close() }()
+			if _, err = s.Send(ctx, "GO-ARCHIVE", session.WriteOptions{IdempotencyKey: "go-archive-message"}); err != nil {
+				t.Fatal(err)
+			}
+			for {
+				event, err := stream.Next()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if outcome, done := event.TurnOutcome(); done {
+					if outcome.Status != session.OutcomeCompleted {
+						t.Fatalf("archive turn: %+v", outcome)
+					}
+					break
+				}
+			}
+			_, err = archive.SyncOnce(ctx, a, store, "go-archive-sync")
+			if err == nil || !loss.lost.Load() {
+				t.Fatalf("ack response loss not observed: %v", err)
+			}
+			pending, err := store.Pending()
+			if err != nil || pending == nil {
+				t.Fatalf("original ACK not durable: %+v %v", pending, err)
+			}
+			if err = store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = archive.OpenFileStore(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			synced, err := archive.SyncOnce(ctx, a, store, "must-not-replace-original-ack")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !synced.Recovered || synced.Receipt == nil || synced.Receipt.Request != pending.Request {
+				t.Fatalf("original acknowledgement not recovered: %+v", synced)
+			}
+			coverage, err := store.Coverage()
+			if err != nil || coverage == nil {
+				t.Fatalf("coverage: %+v %v", coverage, err)
+			}
+			if err = store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = archive.OpenFileStore(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restored, err := store.Coverage()
+			if err != nil || restored == nil || *restored != *coverage {
+				t.Fatalf("restored coverage: %+v %v", restored, err)
+			}
+			records, err := store.ReadRecords("1", 128)
+			if err != nil || len(records) == 0 {
+				t.Fatalf("restored records: %d %v", len(records), err)
+			}
+			found := false
+			for _, record := range records {
+				body, err := store.Body(record.Payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				found = found || bytes.Contains(body, []byte("go-archive-answer"))
+			}
+			if !found {
+				t.Fatal("terminal archive did not retain synthetic assistant answer")
+			}
+			status, err = a.Status(ctx, binding.BindingID)
+			if err != nil || status.AcknowledgedCoverage == nil || *status.AcknowledgedCoverage != *coverage {
+				t.Fatalf("Serve acknowledged coverage: %+v %v", status, err)
+			}
+			resumed, err := sessions.Resume(ctx, s.ID())
+			if err != nil || resumed.ID() != s.ID() {
+				t.Fatalf("explicit %s resume: %v", family, err)
+			}
+		})
+	}
+}
+
+func TestRealServeSessionWire(t *testing.T) {
+	f := startFixture(t, "session")
+	c := clientFor(t, f)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	created, err := c.Call(ctx, api.OpSessionCreate, api.CallOptions{Body: map[string]any{"tools": []string{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var made struct {
+		SessionID string `json:"sessionId"`
+		LastSeq   int64  `json:"lastSeq"`
+	}
+	if err := created.Decode(&made); err != nil || made.SessionID == "" {
+		t.Fatalf("invalid create: %s (%v)", created.Body, err)
+	}
+	p := map[string]string{"id": made.SessionID}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		if _, err := c.Call(closeCtx, api.OpSessionClose, api.CallOptions{Params: p}); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	stream, err := c.Events(ctx, api.OpSessionEventsObserve, api.EventsOptions{Params: p, LastEventID: fmt.Sprint(made.LastSeq)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	closure, err := c.SessionCapabilities(ctx, made.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, err := c.Call(ctx, api.OpSessionMessageSend, api.CallOptions{Params: p, Body: map[string]any{"prompt": "GO-SESSION"},
+		ClosureID: closure.ClosureID, IdempotencyKey: "go-integration-message"})
+	if err != nil || sent.Status != 202 {
+		t.Fatalf("send: %+v %v", sent, err)
+	}
+	var text strings.Builder
+	for {
+		frame, err := stream.Next()
+		if err != nil {
+			t.Fatalf("missing completed turn: %v", err)
+		}
+		env := frame.Envelope
+		if env.Type != nil && *env.Type == "msg.text.delta" {
+			var raw struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(env.Raw, &raw); err != nil {
+				t.Fatal(err)
+			}
+			text.WriteString(raw.Text)
+		}
+		if env.IsTerminal() {
+			if env.Type == nil || *env.Type != "turn.completed" || *env.TerminalStatus != api.TerminalCompleted {
+				t.Fatalf("not a completed turn: %s", frame.Data)
+			}
+			break
+		}
+	}
+	if text.String() != "go-real-serve-answer" {
+		t.Fatalf("text=%q", text.String())
+	}
+	if stream.LastEventID() == "" {
+		t.Fatal("no replay cursor")
+	}
+}
+
+func TestRealServeSessionClient(t *testing.T) {
+	f := startFixture(t, "session")
+	c, err := session.New(clientFor(t, f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, err := c.Create(ctx, session.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
+		defer done()
+		if _, err := s.Close(closeCtx, session.WriteOptions{}); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	attached, err := c.Resume(ctx, s.ID())
+	if err != nil || attached.ID() != s.ID() {
+		t.Fatalf("resume live: %v", err)
+	}
+	stream, err := s.Events(ctx, fmt.Sprint(s.Created().LastSeq))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if _, err := s.Send(ctx, "GO-HIGH-LEVEL", session.WriteOptions{IdempotencyKey: "go-session-client"}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome, done := event.TurnOutcome(); done {
+			if outcome.Status != session.OutcomeCompleted {
+				t.Fatalf("outcome: %+v", outcome)
+			}
+			break
+		}
+	}
+	history, err := s.History(ctx, 0, 20)
+	if err != nil || !bytes.Contains(history, []byte("go-real-serve-answer")) {
+		t.Fatalf("history: %s %v", history, err)
+	}
+	last := stream.LastEventID()
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reconnected, err := s.Events(ctx, last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reconnected.Close()
+	if _, err := s.Send(ctx, "GO-BLOCK", session.WriteOptions{IdempotencyKey: "go-session-block"}); err != nil {
+		t.Fatal(err)
+	}
+	interrupted := false
+	for {
+		event, err := reconnected.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == "msg.text.delta" && !interrupted {
+			if _, err := s.Interrupt(ctx, session.WriteOptions{IdempotencyKey: "go-session-interrupt"}); err != nil {
+				t.Fatal(err)
+			}
+			interrupted = true
+		}
+		if outcome, done := event.TurnOutcome(); done {
+			if !interrupted || outcome.Status != session.OutcomeAborted {
+				t.Fatalf("interrupt outcome: %+v", outcome)
+			}
+			break
+		}
+	}
+}
