@@ -32,6 +32,13 @@ var encryptedJournalMagic = []byte("Tansr-Go-Journal/1\n")
 // NewEncryptedFileJournal protects both claims and full receipts, including read
 // results containing publication bytes. Existing plaintext journals are rejected.
 func NewEncryptedFileJournal(directory string, options JournalEncryption) (*FileJournal, error) {
+	enc, err := newJournalEncryption(options)
+	if err != nil {
+		return nil, err
+	}
+	return openFileJournal(directory, enc)
+}
+func newJournalEncryption(options JournalEncryption) (*journalEncryption, error) {
 	if len(options.Key) != 32 || options.CheckAccess == nil || validate("Id", options.ApplicationScopeID) != nil || validate("LegacyId", options.EndUserID) != nil || validate("Id", options.ExecutorID) != nil {
 		return nil, ErrInvalid
 	}
@@ -51,8 +58,7 @@ func NewEncryptedFileJournal(directory string, options JournalEncryption) (*File
 		return nil, e
 	}
 	options.Key = nil
-	enc := &journalEncryption{aead: a, aad: aad, identity: options}
-	return openFileJournal(directory, enc)
+	return &journalEncryption{aead: a, aad: aad, identity: options}, nil
 }
 func (j *FileJournal) EncryptedAtRest() bool { return j.encryption != nil }
 func (j *FileJournal) protect(name string, data []byte) ([]byte, error) {
@@ -118,13 +124,15 @@ func (j *FileJournal) initializeJournalMode() error {
 		if e != nil {
 			return e
 		}
-		names, e := d.Readdirnames(1)
+		names, e := d.Readdirnames(2)
 		d.Close()
 		if e != nil && !errors.Is(e, io.EOF) {
 			return ErrConflict
 		}
-		if len(names) > 0 {
-			return ErrConflict
+		for _, name := range names {
+			if name != journalLockName {
+				return ErrConflict
+			}
 		}
 	}
 	if j.encryption == nil {

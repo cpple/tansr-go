@@ -28,6 +28,7 @@ type FileJournal struct {
 	mu         sync.Mutex
 	closed     bool
 	encryption *journalEncryption
+	lock       *os.File
 }
 
 func NewFileJournal(directory string) (*FileJournal, error) { return openFileJournal(directory, nil) }
@@ -63,8 +64,19 @@ func openFileJournal(directory string, encryption *journalEncryption) (*FileJour
 		return nil, err
 	}
 	j := &FileJournal{root: root, encryption: encryption}
+	if encryption != nil {
+		if err = j.openMigrationLock(); err != nil {
+			root.Close()
+			return nil, err
+		}
+		if err = j.lockJournal(); err != nil {
+			j.Close()
+			return nil, err
+		}
+		defer j.unlockJournal()
+	}
 	if err = j.initializeJournalMode(); err != nil {
-		root.Close()
+		j.Close()
 		return nil, err
 	}
 	return j, nil
@@ -76,7 +88,11 @@ func (j *FileJournal) Close() error {
 		return nil
 	}
 	j.closed = true
-	return j.root.Close()
+	var lockErr error
+	if j.lock != nil {
+		lockErr = j.lock.Close()
+	}
+	return errors.Join(j.root.Close(), lockErr)
 }
 
 type journalClaim struct {
@@ -193,6 +209,10 @@ func (j *FileJournal) Claim(ctx context.Context, op Operation) (ClaimResult, err
 	if j.closed {
 		return ClaimResult{}, os.ErrClosed
 	}
+	if err = j.lockJournal(); err != nil {
+		return ClaimResult{}, err
+	}
+	defer j.unlockJournal()
 	if err = j.checkJournal(op); err != nil {
 		return ClaimResult{}, err
 	}
@@ -237,6 +257,10 @@ func (j *FileJournal) Complete(ctx context.Context, op Operation, receipt Receip
 	if j.closed {
 		return os.ErrClosed
 	}
+	if err = j.lockJournal(); err != nil {
+		return err
+	}
+	defer j.unlockJournal()
 	if err = j.checkJournal(op); err != nil {
 		return err
 	}

@@ -59,11 +59,72 @@ Create only once; subsequent runs use the default `reopen` with the original fil
 - 默认最多4096个transfer、8MiB暂存、32MiB密文文件。`Capacity`显示逻辑占用。终态没有TTL或自动删除；满额明确capacity_exceeded。整个snapshot每块重写，适合有界单设备；大规模应用用自定义事务介质。永久防重见证不能因满额换目录/删记录。
 - AES-256-GCM保护publication正文、暂存、身份、owner、原transfer结果及临时文件。独立journal加密保护claim和read回执敏感副本，AAD绑定应用/用户/执行器/文件名，缺钥/错钥/篡改拒绝。应用日志、进程内存、磁盘备份中的钥不在此声明内；Demo不输出正文或钥。
 - 错钥、身份变化、损坏、撤权不覆盖原件。提交后授权/IO失败按unknown，关闭后用同原介质对账。备份需停止写入/关闭后复制整snapshot与完整journal，保留原钥和身份；旧备份不包含后续提交见证，不能作为当前授权或安全回滚依据。
-- `Rekey(sourceOptions, freshTargetPath, newKey)`独占重开源、一次加密提交复制全部正文/暂存/终态，新路径必须不存在。核验后由宿主显式切路径；源保留。journal是另一介质，仍需原钥；没有自动journal换钥/清理或跨介质事务。当前版本不提供跨设备同步、离线副本删除、长期transfer压实或完整设备备份编排。
+- `Rekey(sourceOptions, freshTargetPath, newKey)`独占重开源、一次加密提交复制全部正文/暂存/终态，新路径必须不存在。核验后由宿主显式切路径；源保留。journal是另一介质，可显式调用下节的 `RekeyEncryptedFileJournal`；没有自动换钥/清理或跨介质事务。当前版本不提供跨设备同步、离线副本删除、长期transfer压实或完整设备备份编排。
 
 The file store uses an exclusive OS lock and encrypted sync/replace snapshots. It preserves original transfer owners, staging and permanent committed/conflict results across process restarts; unknown transfers are never recreated. Bounds default to 4096 transfers, 8 MiB staging and a 32 MiB encrypted file. Full capacity fails explicitly without dropping idempotency witnesses. This implementation rewrites the bounded snapshot on each chunk; custom transactional stores can serve larger workloads.
 
-AES-GCM protects the publication, staging, owner/receipt metadata and temporary files. The separate encrypted journal protects full execution receipts, including read bytes. Wrong keys, identity/AAD mismatch, corruption and revoked access fail closed and preserve originals. No physical power-loss or network-filesystem SLA is claimed. Back up closed media together with the original host-managed keys; old backups are not current authorization or proof that later commits never happened. `Rekey` copies the publication to a fresh path while retaining all transfer facts; the separate journal still needs its original key. Automatic journal key migration, cross-device synchronization and transfer compaction remain outside this implementation.
+AES-GCM protects the publication, staging, owner/receipt metadata and temporary files. The separate encrypted journal protects full execution receipts, including read bytes. Wrong keys, identity/AAD mismatch, corruption and revoked access fail closed and preserve originals. No physical power-loss or network-filesystem SLA is claimed. Back up closed media together with the original host-managed keys; old backups are not current authorization or proof that later commits never happened. `Rekey` copies the publication to a fresh path while retaining all transfer facts; the separate journal has its own explicit `RekeyEncryptedFileJournal` step below. Automatic migration, cross-device synchronization and transfer compaction remain outside this implementation.
+
+
+## 显式保源换钥 / explicit source-preserving key rotation
+
+先停止并排空 publication 与 execution journal 的所有写入，关闭 runner 与介质。备妥原身份、原钥及两个完整原件，再分别执行两步。`memorypublication.Rekey` 沿用既有完整 snapshot 入口；新增 `executor.RekeyEncryptedFileJournal` 只支持现有 encrypted-v1 journal 到**不存在的新目录及不同的32字节新钥**，不迁明文、不改应用/用户/执行器，也不重新签发 owner、operation、transfer 或 digest。它复制所有原文件键、claim digest 和永久 receipt（含 read 敏感正文）；没有 receipt 的 claim 仍为 pending，已有 unknown 回执仍为 unknown。换连接/授权代际不能用同原键重新执行。
+
+Stop and drain both stores and close the runner before either step. Retain the original identity, keys and complete media. The existing publication `Rekey` is unchanged. The new encrypted journal migration requires an absent destination and a different 32-byte key. It preserves every original filename/key, claim digest and receipt, including sensitive read bytes. Pending claims and unknown outcomes never become permission to execute again. It cannot change identity, invent authorization or take over another owner's publication.
+
+```go
+// Writers have stopped; both directories have host-controlled private permissions/ACLs.
+// Step 1: publication (check error and close the returned store).
+next, err := memorypublication.Rekey(sourceOptions, newPublicationPath, newKey)
+if err != nil { return err }
+if err = next.Close(); err != nil { return err }
+// Step 2: complete execution journal, using its original authenticated identity.
+err = executor.RekeyEncryptedFileJournal(ctx, originalJournalDirectory,
+    newJournalDirectory, executor.JournalMigrationOptions{
+        Source: originalJournalEncryption, TargetKey: newKey,
+        // Defaults: MaxFiles = 65536 claim/receipt files; MaxBytes = 1 GiB ciphertext.
+    })
+if err != nil {
+    var failure *executor.JournalMigrationError
+    if errors.As(err, &failure) {
+        // Preserve failure.StagingDirectory and failure.TargetDirectory.
+        // Published=true means a complete target was published before a later error.
+        // Reconcile with current authorization; do not overwrite or auto-delete either.
+    }
+    return err
+}
+// Verify BOTH new media with the original identity and new key, then switch paths once.
+// Keep original files and original key; never resume writers on both copies.
+```
+
+journal 迁移在新目标的父目录建立私有密文 stage，逐项验证原 claim/receipt 配对与文件键，完成全部复制、重读及冷开校验后，才用不覆盖原路径的目录发布原语使目标首次可见。已有空目录也拒绝，不用普通 rename 覆盖它。默认迁移上限为65536条 claim/receipt 文件和1GiB总密文字节，宿主可显式调整；超过上限拒绝，绝不丢永久见证。缺 marker、未知文件/格式、损坏、错主体/钥、撤权及取消均保留原件；失败 stage 不自动删除，内容若已写入均为密文。`JournalMigrationError` 的 `Published` 区分发布前失败与完整目标已发布后的失败；错误不代表目标不存在，也不允许换键重执行。原加密格式、原命名和原正文不变；首次打开旧版本 journal 可能增添空 `.journal-lock` 文件。
+
+The first visible target is the complete snapshot: encrypted staging, validation and cold reopen all finish before an exclusive directory rename. Even an existing empty destination is refused. Default migration limits reject oversized sources without dropping witnesses. A missing marker, unknown file/version, corrupt record, wrong identity/key, revoked access or cancellation never reconstructs an empty source. Failed staging is retained and never contains plaintext record files. `JournalMigrationError.Published` distinguishes pre-publication failure from an error after a complete target became visible. Opening an older source can add only an empty `.journal-lock` file; existing record bytes and the encrypted-v1 format stay unchanged.
+
+本版本 encrypted constructor、Claim、Complete 与迁移共享非等待 OS 排他锁；迁移期间另一同版本进程的开库/写操作失败，不能靠目录 hash 检查假装排他。原 plaintext journal 的 O_EXCL 并发行为不变。旧版本或绕过 SDK 的写入者不受新锁保护，必须由宿主先停写。成功后锁会释放，**SDK不会封存旧副本或自动切换两库**；两库之间没有事务，第一步成功、第二步失败时保留新第一库和两个原件，排查后只对尚未完成的介质使用新的空目标重试，不能重新覆盖第一库。双库验证完成才切换；开始在新库写入后，旧副本已落后，不能安全回滚或并行双写。AES-GCM 使用随机 nonce；本入口仍要求真正不同的新钥。
+
+Encrypted constructors, Claim, Complete and migration now share a nonblocking OS lock. Same-version writers are excluded during migration; plaintext journal concurrency remains unchanged. Older or noncooperating writers must be stopped by the host. The lock is released afterward: **the SDK does not retire the old copy or transact across the two stores**. If only one step succeeds, retain that target and both originals, reconcile, and retry only the unfinished step into a fresh destination. Switch once after verifying both, never write to both copies. Once new writes begin, the old backup is stale and is not a safe rollback. GCM nonces are random, and this migration still requires a different key.
+
+Demo 提供两个**离线模式**，均不连接 Serve、不创建会话或执行工具。离线取消仍以非零退出并报告保留目录，不能按普通 runner Ctrl+C 静默当成功。原钥仍放 `TANSR_MEMORY_KEY`，不同新钥放 `TANSR_MEMORY_NEW_KEY`（均为宿主提供64位hex；不要把钥写进命令行/文件）。复用原身份及实时授权文件；此时不需 session/binding-request。Windows使用同等绝对路径及私有ACL。
+
+The demo exposes two offline steps without contacting Serve or invoking tools. Cancellation in either offline mode remains an error with a nonzero command exit and retained recovery information; only normal runner interruption is quiet. Supply the original `TANSR_MEMORY_KEY` and distinct `TANSR_MEMORY_NEW_KEY` through the host key facility, plus the original identity and live authorization file. No session or binding request is needed for these modes.
+
+```sh
+# Stop ALL writers before both commands; keep both original media and keys.
+go run ./examples/go-memory -mode rekey-publication -executor AUTHORIZED_EXECUTOR \
+  -file /private/tansr/memory.bin -journal /private/tansr/journal \
+  -identity-file /private/tansr/memory-identity.json -access-file /private/tansr/current-scope.json \
+  -target /private/tansr/memory-next.bin
+go run ./examples/go-memory -mode rekey-journal -executor AUTHORIZED_EXECUTOR \
+  -file /private/tansr/memory.bin -journal /private/tansr/journal \
+  -identity-file /private/tansr/memory-identity.json -access-file /private/tansr/current-scope.json \
+  -target /private/tansr/journal-next
+# Verify both, then run normal -mode reopen using BOTH new paths and the new key.
+```
+
+目录发布使用Windows MoveFileEx（无覆盖标志）、Linux renameat2(RENAME_NOREPLACE)、Darwin renameatx_np(RENAME_EXCL)；不支持的系统/ABI/文件系统明确失败而不退化为覆盖式 rename。Linux实现当前支持amd64/arm64/riscv64/loong64；Darwin支持Go的amd64/arm64。此处列的是代码适配范围，实际本批只验Windows；跨编译不能代替Linux/macOS运行或物理掉电保证。
+
+Directory publication uses OS no-replace primitives and fails explicitly when unsupported. The Linux adapter covers amd64/arm64/riscv64/loong64; Darwin covers Go's amd64/arm64. These are implementation targets, not runtime acceptance claims: this batch is tested on Windows only. Cross-builds do not prove Linux/macOS execution or physical power-loss durability.
 
 ## 本地候选验收记录 / local candidate evidence (2026-10-10)
 
@@ -78,3 +139,15 @@ AES-GCM protects the publication, staging, owner/receipt metadata and temporary 
 证据唯一目录：`J:/tansr/archive/PST-PLAN-20261009/dev-20261010-b2/go/`。`candidate-source-manifest.json`/最终清单登记源码，`serve-source-receipt.json`记录实际核心源hash，`go-test-final.jsonl`和`go-integration-recheck.jsonl`保留两轮原日志；`final-test-assessment.json`去重并保留红项，`final-gates.json`、`local-install-receipt.json`记录其他原门与本地安装物。后续恢复入口是同一候选下原 `TestRealServeToolsDemo`；排除启动拒绝并补齐原门之前不合并。Linux/macOS实际运行、race、正式发行及整个PST跨生态矩阵仍未代签。
 
 The Windows candidate completed real local Serve publication (10 original execution receipts and encrypted cold reopen), but the full acceptance gate remains open: the existing go-tools demo executable was denied at Windows process startup twice. The complete integration rerun passed the other seven top-level cases. Deduplicated evidence is 856 pass, 1 fail, 0 skipped/incomplete. Vet, all three OS cross-builds, frozen contract/generated checks and local go-memory installation/help passed. No assertion or OS security setting was weakened. Linux/macOS execution, race (CGO unavailable), standalone new-demo network execution and release are not claimed.
+
+## 第四批候选门 / fourth-batch candidate checks
+
+本批复用原 publication.Rekey，新增 journal 显式迁移及两个离线 Demo 步骤。新增局部反例覆盖原键 pending/completed/failed/unknown、变授权同键拒绝、同版本跨进程锁、缺marker/错钥/错主体/损坏/孤儿回执/容量拒绝、迁移取消/撤权、晚到空目标不覆盖，以及已发布后出错的具名恢复状态。只读审查发现 Demo 原取消策略会吞离线迁移错误，已实跑红→绿；只对正常 runner 保留静默 Ctrl+C，两个离线模式保留错误链及路径并失败退出。存储原语/冻结wire不因该修复变化。
+
+集中原门一次，881 Test（158顶层+723子项）=874 pass/7 fail/0 skip/0 incomplete；7红为当时仍在编辑的核心 `archive-host.ts:1159` 中 await 非async语法错误，导致原3个Archive顶层及4子项在Serve ready前失败。原 `TestRealServeToolsDemo` 本次PASS，上一批 Access denied 未复现且根因仍未知；真实 publication/执行器/会话均PASS。只读事件核对未发现对应拒绝证据，没有修改安全设置或原断言。核心负责人确认相关实现冻结后，只补这3个Archive原测试，7/7通过，没有重跑全池。合并Demo取消修复的局部结果后，最终去重882/882（159顶层+723子项），0 fail/skip/incomplete。复验前后3306份保守源码清单中仅两处ColdMaterialCoverage类型导出变化；原始哈希和转译结果均存档，运行JavaScript完全相同，不声称源码字节完全未变。
+
+Demo取消窄修后，受影响整个Demo包5/5再次PASS（包括新增1项），vet及三OS编译通过；安装后的 go-memory.exe 实际完成两个离线换钥步骤，原新两介质分别以原/新钥重开通过。其余原门go vet、Windows/Linux/Darwin amd64全仓build、39文件源合同、生成、gofmt/diff及本地安装/help均通过。Linux/macOS实际运行、CGO=0的race、物理掉电/网络盘、新Demo完整Serve进程仍未验；不关闭父PST卡。
+
+The fourth batch preserves the original publication migration and adds journal rotation plus offline demo steps. Review caught cancellation incorrectly being treated as command success; its new stage-created cancellation regression went red then green, and the full affected demo package passed 5/5. The one full run recorded 874 pass/7 fail out of 881 tests, with all seven failures coming from an in-progress core Archive host syntax error before Serve startup. The original go-tools real Serve case passed this time; the earlier Windows launch-denial cause remains unknown. Vet, all three OS cross-builds, frozen/generated checks and installed offline migration consumption passed. After the core correction, only the three original Archive cases were rerun: all seven top-level/subtest results passed. Combined with the affected demo rerun, the final deduplicated result is 882/882 (159 top-level, 723 subtests), with no failed/skipped/incomplete tests. Two type-only export additions appeared in the conservative 3306-file source audit; both versions transpiled to identical runtime JavaScript and the byte changes remain recorded. Linux/macOS runtime, race, physical power-loss and the parent PST acceptance are not claimed.
+
+证据：`J:/tansr/archive/PST-PLAN-20261009/dev-20261010-b4/go/`，原全池日志 `go-test-final.jsonl`，取消红/绿 `demo-cancellation-red.log`/`demo-after-cancellation.jsonl`，安装消费 `installed-offline-consumer-final.log`，候选与完整归档摘要见 `candidate-source-manifest.json`、`report.md`、`manifest.json`。

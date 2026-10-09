@@ -203,3 +203,7 @@ go run ./internal/gen/contractcheck               # frozen-source copy check
 ## PST-05 unpublished persistence candidate
 
 `memorypublication` adds a dedicated encrypted MemoryPublication store and trusted host through the original executor loop. `executor.NewEncryptedFileJournal` also protects full execution receipts. The original Archive API remains unchanged. See [MemoryPublication 接入与保证 / setup and guarantees](doc/PST-05-MemoryPublication.md) for the `go-memory` source demo, current scope checks, bounded capacity, recovery and key handling. These new symbols are not included in published v0.3.0.
+
+PST-05 第四批增加 `executor.RekeyEncryptedFileJournal` 和 `go-memory -mode rekey-publication|rekey-journal` 离线调用：停写后显式保留原件迁移，保留原 claim/永久 receipt/pending/unknown，同版本写入与 journal 迁移由 OS 锁互斥。两个介质没有事务，验证双成功后才切换，不能并行双写或覆盖旧目录；详见上面的中英接入说明。
+
+The fourth PST-05 batch adds explicit source-preserving encrypted journal key rotation and two offline demo modes. Original operation keys and all durable outcomes remain intact. There is no transaction across publication and journal: stop writers, verify both destinations, then switch once. These symbols remain unpublished.

@@ -24,7 +24,7 @@ import (
 	"github.com/tansrai/tansr-go/memorypublication"
 )
 
-type options struct{ base, session, executor, workspace, file, journal, mode, access, identity, bindingRequest string }
+type options struct{ base, session, executor, workspace, file, journal, mode, access, identity, bindingRequest, target string }
 
 func flags(f *flag.FlagSet, o *options) {
 	f.StringVar(&o.base, "base", "http://127.0.0.1:8787", "Serve origin")
@@ -33,7 +33,8 @@ func flags(f *flag.FlagSet, o *options) {
 	f.StringVar(&o.workspace, "workspace", "go-memory", "logical workspace, not a filesystem path")
 	f.StringVar(&o.file, "file", "", "private encrypted publication file (required)")
 	f.StringVar(&o.journal, "journal", "", "private encrypted execution journal directory (required)")
-	f.StringVar(&o.mode, "mode", "reopen", "create once or reopen the same medium")
+	f.StringVar(&o.mode, "mode", "reopen", "create, reopen, rekey-publication or rekey-journal (offline)")
+	f.StringVar(&o.target, "target", "", "absent destination for one offline rekey step")
 	f.StringVar(&o.access, "access-file", "", "host-controlled live authorization Scope JSON (required)")
 	f.StringVar(&o.identity, "identity-file", "", "host-provided publication Identity JSON (required)")
 	f.StringVar(&o.bindingRequest, "binding-request", "", "original terminal binding request ID (required; retain on lost reply)")
@@ -44,10 +45,22 @@ func main() {
 	flag.Parse()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	if e := run(ctx, o); e != nil && !errors.Is(e, context.Canceled) {
+	if e := runCommand(ctx, o); e != nil {
 		fmt.Fprintln(os.Stderr, "go-memory:", demoutil.Text(demoutil.Describe(e).Error()))
 		os.Exit(1)
 	}
+}
+
+// runCommand applies the command's interrupt policy after run has preserved errors.
+func offlineRekeyMode(mode string) bool {
+	return mode == "rekey-publication" || mode == "rekey-journal"
+}
+func runCommand(ctx context.Context, o options) error {
+	err := run(ctx, o)
+	if !offlineRekeyMode(o.mode) && errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
 }
 func readJSON(path string, value any) error {
 	f, e := os.Open(path)
@@ -67,8 +80,18 @@ func readJSON(path string, value any) error {
 	return d.Decode(value)
 }
 func run(ctx context.Context, o options) error {
-	if o.session == "" || o.executor == "" || o.file == "" || o.journal == "" || o.access == "" || o.identity == "" || o.bindingRequest == "" {
-		return errors.New("session, executor, file, journal, access-file, identity-file and binding-request are required")
+	migrating := offlineRekeyMode(o.mode)
+	if o.mode != "create" && o.mode != "reopen" && !migrating {
+		return errors.New("mode must be create, reopen, rekey-publication or rekey-journal")
+	}
+	if o.executor == "" || o.file == "" || o.journal == "" || o.access == "" || o.identity == "" {
+		return errors.New("executor, file, journal, access-file and identity-file are required")
+	}
+	if migrating && o.target == "" {
+		return errors.New("offline rekey requires an absent target; stop and drain all writers first")
+	}
+	if !migrating && (o.session == "" || o.bindingRequest == "") {
+		return errors.New("session and original binding-request are required")
 	}
 	key, e := hex.DecodeString(os.Getenv("TANSR_MEMORY_KEY"))
 	if e != nil || len(key) != 32 {
@@ -113,6 +136,42 @@ func run(ctx context.Context, o options) error {
 	journalPath, e := filepath.Abs(o.journal)
 	if e != nil {
 		return e
+	}
+	if scope.ApplicationScopeID != identity.ApplicationScopeID || scope.EndUserID != identity.EndUserID {
+		return executor.ErrConflict
+	}
+	if migrating {
+		nextKey, err := hex.DecodeString(os.Getenv("TANSR_MEMORY_NEW_KEY"))
+		if err != nil || len(nextKey) != 32 || bytes.Equal(key, nextKey) {
+			return errors.New("TANSR_MEMORY_NEW_KEY must contain a different 32-byte host key (64 hex characters)")
+		}
+		defer clear(nextKey)
+		target, err := filepath.Abs(o.target)
+		if err != nil {
+			return err
+		}
+		if o.mode == "rekey-publication" {
+			migrated, err := memorypublication.Rekey(memorypublication.Options{Path: path, Key: key, Identity: identity, CurrentScope: current}, target, nextKey)
+			if err != nil {
+				return err
+			}
+			if err = migrated.Close(); err != nil {
+				return err
+			}
+		} else {
+			err = executor.RekeyEncryptedFileJournal(ctx, journalPath, target, executor.JournalMigrationOptions{
+				Source: executor.JournalEncryption{Key: key, ApplicationScopeID: scope.ApplicationScopeID, EndUserID: scope.EndUserID, ExecutorID: o.executor, CheckAccess: check}, TargetKey: nextKey,
+			})
+			if err != nil {
+				var migration *executor.JournalMigrationError
+				if errors.As(err, &migration) {
+					return fmt.Errorf("%w; retain encrypted stage %q and target %q for reconciliation", err, migration.StagingDirectory, migration.TargetDirectory)
+				}
+				return err
+			}
+		}
+		fmt.Println("verified offline rekey: original retained; verify both media before one explicit cutover; never resume both copies")
+		return nil
 	}
 	// The caller creates a private directory/ACL. Missing recovery data are never rebuilt.
 	if o.mode == "reopen" {
