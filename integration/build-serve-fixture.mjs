@@ -58,7 +58,7 @@ let source = fixtureBytes.toString('utf8').replace(/\bload\('([^']+)'\)/g, (_mat
   moduleInputs.add(name);
   return `import(${JSON.stringify(slash(join(cliRoot, name)))})`;
 });
-if (moduleInputs.size !== 10) throw new Error(`The reviewed real source module set changed (${moduleInputs.size}); review fixture input closure`);
+if (moduleInputs.size !== 11) throw new Error(`The reviewed real source module set changed (${moduleInputs.size}); review fixture input closure`);
 source = source.replace(/^const load = relative => import\(pathToFileURL\(join\(cliRoot, relative\)\)\.href\);\r?\n/m, '');
 const manifestStatement = "const contract = JSON.parse(await readFile(join(cliRoot, 'packages/server/contract/api-manifest.json'), 'utf8'));";
 if (!source.includes(manifestStatement) || /\bload\(/.test(source)) throw new Error('Fixture load/manifest anchors changed; do not emit a partial source bundle');

@@ -22,19 +22,21 @@ import (
 	"github.com/tansrai/tansr-go/api"
 	"github.com/tansrai/tansr-go/archive"
 	"github.com/tansrai/tansr-go/executor"
+	"github.com/tansrai/tansr-go/memorypublication"
 	"github.com/tansrai/tansr-go/session"
 )
 
 // 这些测试只有显式指定 CLI 工作区或同源便携宿主时运行，普通 Go 消费者不安装 Node。
 type fixture struct {
-	BaseURL               string          `json:"baseURL"`
-	Token                 string          `json:"token"`
-	ApplicationScopeID    string          `json:"applicationScopeId"`
-	EndUserID             string          `json:"endUserId"`
-	AuthorizationRevision string          `json:"authorizationRevision"`
-	DefinitionDigest      string          `json:"definitionDigest"`
-	Declaration           json.RawMessage `json:"declaration"`
-	ManifestRevision      int             `json:"manifestRevision"`
+	PublicationIdentity   memorypublication.Identity `json:"publicationIdentity"`
+	BaseURL               string                     `json:"baseURL"`
+	Token                 string                     `json:"token"`
+	ApplicationScopeID    string                     `json:"applicationScopeId"`
+	EndUserID             string                     `json:"endUserId"`
+	AuthorizationRevision string                     `json:"authorizationRevision"`
+	DefinitionDigest      string                     `json:"definitionDigest"`
+	Declaration           json.RawMessage            `json:"declaration"`
+	ManifestRevision      int                        `json:"manifestRevision"`
 }
 
 // loseAckResponse forwards the real request and drains its real success response,

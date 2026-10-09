@@ -20,7 +20,7 @@ Go SDK for Tansr Serve. The client stays lightweight: Serve owns the agent loop,
 | `archive` | 绑定、档案页与附件校验、AES-GCM 本地存储、落盘后 ACK、待决 ACK 恢复及材料交接 API |
 | `canonical` / `sse` | 冻结合同的严格 canonical JSON、域摘要和 SSE 帧解析 |
 
-`executor.Runner` 只承接显式安装的 `tool.invoke` 业务函数；不会默认开放 shell、文件系统或回落到 Serve 宿主执行。输出写入器需要已协商的终端绑定与限额，不会自行开启终端服务。档案示例是单端有界存储，不等于完整记忆发布、跨设备同步、保留策略、备份恢复或高级缓存管理。通用 API 可调用已冻结操作，不意味着所有操作都有 Go 高层编排或本批 Demo。
+`executor.Runner` 承接显式安装的 `tool.invoke` 业务函数及独立的 MemoryPublication 保留 profile；不会默认开放 shell、文件系统或回落到 Serve 宿主执行。输出写入器需要已协商的终端绑定与限额，不会自行开启终端服务。档案示例是单端有界存储，不等于完整记忆发布、跨设备同步、保留策略、备份恢复或高级缓存管理。通用 API 可调用已冻结操作，不意味着所有操作都有 Go 高层编排或本批 Demo。
 
 三个 Demo 都显式选择 **`sdk1` 会话族，通过统一 `/api` 接入**，然后按部署能力使用 SDK2 执行与档案扩展；这里的族名不是旧路由。`session.Client` 也允许显式选择 `sdk2-offload-v1`，但调用方必须完整接线该族要求的 Source / 档案生命周期，不能仅改字符串就视为完成历史卸载。服务未安装、应用未授权或围栏关闭时返回明确错误，不自动切换族。
 
@@ -199,3 +199,7 @@ go run ./internal/gen/contractcheck               # frozen-source copy check
 ```
 
 `integration/` 对本地真实 Serve 的公开 `/api` 路由运行合成会话、工具与档案场景，并可编译运行三个 Demo；这与模拟 HTTP 单测不同，也不代表付费真实模型、生产部署或正式发行。运行结果、操作系统覆盖与剩余外部条件以本批验收记录为准。Go SDK 与 Demo 采用 [MIT License](LICENSE)；冻结上游参考资料保留来源许可，详见 [NOTICE](NOTICE.md)。
+
+## PST-05 unpublished persistence candidate
+
+`memorypublication` adds a dedicated encrypted MemoryPublication store and trusted host through the original executor loop. `executor.NewEncryptedFileJournal` also protects full execution receipts. The original Archive API remains unchanged. See [MemoryPublication 接入与保证 / setup and guarantees](doc/PST-05-MemoryPublication.md) for the `go-memory` source demo, current scope checks, bounded capacity, recovery and key handling. These new symbols are not included in published v0.3.0.

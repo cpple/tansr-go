@@ -10,10 +10,11 @@ import (
 )
 
 type RunnerOptions struct {
-	Client       *Client
-	Registration Registration
-	Journal      Journal
-	Tools        map[string]Tool
+	Client            *Client
+	Registration      Registration
+	Journal           Journal
+	Tools             map[string]Tool
+	MemoryPublication MemoryPublicationHost
 	// Authorize must check the local session, binding and current host permission. A Serve claim
 	// alone is not permission to use the device. It runs before durable claim and again before IO.
 	Authorize    func(context.Context, Operation) error
@@ -51,11 +52,33 @@ func NewRunner(options RunnerOptions) (*Runner, error) {
 	}
 	// This implementation is deliberately a business-tool host. It cannot accidentally advertise
 	// filesystem/process operations for which no local policy or protected backend was supplied.
-	if len(options.Registration.Operations) != 1 || options.Registration.Operations[0] != "tool.invoke" || len(options.Tools) == 0 || len(options.Tools) != len(options.Registration.Tools) {
+	count := len(options.Tools)
+	if options.MemoryPublication != nil {
+		count++
+		if options.MemoryPublication.RequiresEncryptedJournal() {
+			j, ok := options.Journal.(interface{ EncryptedAtRest() bool })
+			if !ok || !j.EncryptedAtRest() {
+				return nil, ErrUnsupported
+			}
+		}
+	}
+	if _, ok := options.Tools[MemoryPublicationToolName]; ok {
+		return nil, ErrUnsupported
+	}
+	if _, ok := options.Tools["MemoryPublication"]; ok {
+		return nil, ErrUnsupported
+	}
+	if len(options.Registration.Operations) != 1 || options.Registration.Operations[0] != "tool.invoke" || count == 0 || count != len(options.Registration.Tools) {
 		return nil, ErrUnsupported
 	}
 	tools := make(map[string]Tool, len(options.Tools))
 	for _, definition := range options.Registration.Tools {
+		if definition.Name == MemoryPublicationToolName {
+			if options.MemoryPublication == nil || definition.DefinitionDigest != MemoryPublicationDefinitionDigest {
+				return nil, ErrUnsupported
+			}
+			continue
+		}
 		tool, ok := options.Tools[definition.Name]
 		if !ok || tool.Handle == nil || tool.DefinitionDigest != definition.DefinitionDigest {
 			return nil, ErrInvalid
@@ -327,6 +350,12 @@ func (r *Runner) execute(ctx context.Context, operation Operation, monitored boo
 		return Receipt{}, ErrUnsupported
 	}
 	tool, ok := r.options.Tools[operation.ToolName]
+	if operation.Request.Args["name"] == MemoryPublicationToolName && r.options.MemoryPublication != nil {
+		ok = true
+		tool = Tool{DefinitionDigest: MemoryPublicationDefinitionDigest, Handle: func(c context.Context, a map[string]any) (any, error) {
+			return r.options.MemoryPublication.Execute(c, operation, a)
+		}}
+	}
 	if !ok || operation.Request.Args["definitionDigest"] != tool.DefinitionDigest {
 		return Receipt{}, ErrUnsupported
 	}

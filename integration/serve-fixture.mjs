@@ -46,7 +46,7 @@ if (mode === 'archive' || mode === 'archive-offload') {
     v2: { authenticate: request => request.headers.authorization === 'Bearer go-integration-token' ? { endUserId: 'go-user' } : null } });
   cleanup = async () => { await server.close(); await server.settleResources?.(); await host.dispose(); };
   info = { baseURL: server.url };
-} else if (mode === 'session' || mode === 'execution' || mode === 'execution-demo') {
+} else if (mode === 'session' || mode === 'execution' || mode === 'execution-demo' || mode === 'publication') {
   const [{ startServer, createAgentSessionFactory }, { createServeAgentSessionStore }, { createFakePlatform, FAKE_API_BASE },
     { openSqliteArchiveSpool }, { defaultAppCapabilities }, { clientToolDefinitionDigest }] = await Promise.all([
     load('packages/server/src/index.ts'), load('packages/server/src/v2/agent-session-store.ts'),
@@ -59,6 +59,8 @@ if (mode === 'archive' || mode === 'archive-offload') {
     globalLimit: limit, maxReservations: 128, maxEntries: 512, maxOperations: 512, maxDatabasePages: 8192 });
   const caps = defaultAppCapabilities('desktop');
   const executionEnabled = mode !== 'session';
+  const publicationIdentity = { kind: 'client-managed', domain: 'go-app/go-user', applicationScopeId: 'go-app', endUserId: 'go-user', sourceId: 'go-memory-source', sourceGeneration: '1' };
+  const publication = mode === 'publication' ? await load('packages/server/src/v2/memory-management.ts') : undefined;
   const fake = createFakePlatform({ bundleExtra: { capabilities: { ...caps, tools: { ...caps.tools, customTools: true },
     ...(executionEnabled ? { execution: { version: 'bound-device-v1', boundDevice: { tools: { customTools: true } } } } : {}) }, app: { platform: 'desktop' } } });
   // Same public declaration as examples/go-tools. A mismatch is caught by the
@@ -92,19 +94,21 @@ if (mode === 'archive' || mode === 'archive-offload') {
     return new Response(frame('t.open', { exchangeId: `go-${number}`, model: body.model, protocol: 'twp/1' }) + content,
       { headers: { 'content-type': 'text/event-stream' } });
   };
-  const build = createAgentSessionFactory({ cwd: directory, store: createServeAgentSessionStore({ dir: join(directory, 'sessions') }),
-    platform: { apiBaseUrl: FAKE_API_BASE, appId: 'go-app', appKey: 'synthetic-fixture-key', fetchImpl },
+  const build = createAgentSessionFactory({ cwd: directory, store: createServeAgentSessionStore({ dir: join(directory, 'sessions'), ...(mode === 'publication' ? { ownership: {} } : {}) }),
+    platform: { apiBaseUrl: FAKE_API_BASE, appId: 'go-app', appKey: 'synthetic-fixture-key', fetchImpl,
+      ...(mode === 'publication' ? { memoryPublicationFor: () => ({ identity: publicationIdentity, mode: 'create', enabled: () => true, balance: () => null, recallSelector: false }) } : {}) },
     ...(executionEnabled ? { execution: { applicationScopeId: 'go-app',
       authorize: request => ({ controller: request.headers.authorization === 'Bearer go-integration-token',
         ...(request.headers.authorization === 'Bearer go-integration-token' ? { executorId: 'go-executor' } : {}) }),
-      readPolicy: async () => ({ authorizationRevision: '1', tools: [declaration.name] }),
+      readPolicy: async () => ({ authorizationRevision: '1', tools: mode === 'publication' ? ['SearchMemory'] : [declaration.name] }),
       spoolFor: () => ({ spool, bindingId: 'go-control' }) } } : {}) });
-  const server = await startServer({ host: '127.0.0.1', port: 0, token: 'unused-legacy', heartbeatMs: 0, readyFrame: 'none',
+  const server = await startServer({ ...(mode === 'publication' ? { terminal: { contract: 'terminal-services-v1' } } : {}), host: '127.0.0.1', port: 0, token: 'unused-legacy', heartbeatMs: 0, readyFrame: 'none',
     createSession: { create() { throw new Error('legacy SDK1 entry is unused'); } },
     v2: { authenticate: request => request.headers.authorization === 'Bearer go-integration-token' ? { endUserId: 'go-user' } : null,
       createSession: build.factory, store: build.storeReader, governance: { sweepIntervalMs: 0 } } });
   cleanup = async () => { await server.close(); await build.flush(); spool.close(); };
-  info = { baseURL: server.url, declaration, definitionDigest: clientToolDefinitionDigest(declaration) };
+  info = { baseURL: server.url, declaration, definitionDigest: clientToolDefinitionDigest(declaration),
+    ...(publication ? { publicationIdentity: { applicationScopeId: 'go-app', endUserId: 'go-user', sourceId: publicationIdentity.sourceId, sourceGeneration: publicationIdentity.sourceGeneration, domainKey: publication.memoryPublicationKey(publicationIdentity) } } : {}) };
 } else {
   throw new Error('unknown fixture mode');
 }

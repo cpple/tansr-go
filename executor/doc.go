@@ -2,7 +2,7 @@
 // contract. Serve owns the agent loop and policy; the device still authorizes every operation.
 //
 // Client validates canonical wire objects, operation digests, scope, connection generations and
-// receipts. Runner executes only registered business tool handlers; it never creates a shell or
+// receipts. Runner executes registered business handlers or a dedicated MemoryPublication host; it never creates a shell or
 // accesses the filesystem on behalf of a model. FileJournal claims operations durably before a
 // handler starts. A pending claim after a crash becomes unknown, never permission to execute again.
 //

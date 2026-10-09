@@ -372,7 +372,17 @@ func validateOperation(operation Operation) error {
 	case "tool.invoke":
 		// Reserved Shell/MemoryPublication profiles need their dedicated adapters. This package's
 		// business runner deliberately cannot turn those names into device execution authority.
-		if operation.Request.Args["name"] != operation.ToolName {
+		if operation.Request.Args["name"] == MemoryPublicationToolName {
+			if operation.ToolName != "MemoryPublication" || operation.Request.Args["definitionDigest"] != MemoryPublicationDefinitionDigest {
+				return ErrUnsupported
+			}
+			args, e := toolObject(operation.Request.Args["argsJson"].(string))
+			if e != nil {
+				return e
+			}
+			return wire.Validate("terminal-services-v1", "MemoryPublicationRequest", args)
+		}
+		if operation.ToolName == "MemoryPublication" || operation.Request.Args["name"] != operation.ToolName {
 			return ErrUnsupported
 		}
 		_, err = toolObject(operation.Request.Args["argsJson"].(string))

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/tansrai/tansr-go/canonical"
@@ -17,17 +18,20 @@ import (
 // FileJournal stores immutable claims and receipts in a host-controlled private directory.
 // O_EXCL is the cross-process claim primitive; fsync happens before returning a successful claim
 // or receipt. An incomplete/corrupt file fails closed, and pending records are never age-evicted.
-// It is not an OS sandbox or encryption layer: the host must protect the directory and its backups.
+// NewFileJournal preserves plaintext compatibility. NewEncryptedFileJournal protects all record bodies.
+// Both require a host-controlled directory and backups; neither is an OS sandbox.
 // Unix also syncs the containing directory. Windows uses File.Sync but has no portable directory
 // flush through the Go standard library; power-loss durability there requires a host-supplied
 // transactional Journal. FileJournal guarantees process-restart replay, not a Windows power-loss SLA.
 type FileJournal struct {
-	root   *os.Root
-	mu     sync.Mutex
-	closed bool
+	root       *os.Root
+	mu         sync.Mutex
+	closed     bool
+	encryption *journalEncryption
 }
 
-func NewFileJournal(directory string) (*FileJournal, error) {
+func NewFileJournal(directory string) (*FileJournal, error) { return openFileJournal(directory, nil) }
+func openFileJournal(directory string, encryption *journalEncryption) (*FileJournal, error) {
 	if !filepath.IsAbs(directory) {
 		return nil, ErrInvalid
 	}
@@ -41,11 +45,29 @@ func NewFileJournal(directory string) (*FileJournal, error) {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, ErrInvalid
 	}
+	if encryption != nil {
+		real, e := filepath.EvalSymlinks(directory)
+		if e != nil {
+			return nil, e
+		}
+		same := filepath.Clean(directory) == real
+		if runtime.GOOS == "windows" {
+			same = strings.EqualFold(filepath.Clean(directory), real)
+		}
+		if !same {
+			return nil, ErrInvalid
+		}
+	}
 	root, err := os.OpenRoot(directory)
 	if err != nil {
 		return nil, err
 	}
-	return &FileJournal{root: root}, nil
+	j := &FileJournal{root: root, encryption: encryption}
+	if err = j.initializeJournalMode(); err != nil {
+		root.Close()
+		return nil, err
+	}
+	return j, nil
 }
 func (j *FileJournal) Close() error {
 	j.mu.Lock()
@@ -78,7 +100,7 @@ func (j *FileJournal) read(name string, out any) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Size() > controlBytes {
+	if !info.Mode().IsRegular() || info.Size() > controlBytes+128 {
 		return ErrOutcomeUnknown
 	}
 	f, err := j.root.Open(name)
@@ -86,10 +108,15 @@ func (j *FileJournal) read(name string, out any) error {
 		return err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, controlBytes+1))
+	data, err := io.ReadAll(io.LimitReader(f, controlBytes+129))
 	if err != nil {
 		return err
 	}
+	data, err = j.unprotect(name, data)
+	if err != nil {
+		return err
+	}
+	defer clear(data)
 	if len(data) > controlBytes {
 		return ErrOutcomeUnknown
 	}
@@ -99,10 +126,18 @@ func (j *FileJournal) read(name string, out any) error {
 	if err = json.Unmarshal(data, out); err != nil {
 		return ErrOutcomeUnknown
 	}
+	if j.encryption != nil {
+		return j.encryption.identity.CheckAccess()
+	}
 	return nil
 }
 func (j *FileJournal) create(name string, value any) error {
 	data, err := canonical.Encode(value, canonical.Options{MaxBytes: controlBytes})
+	if err != nil {
+		return err
+	}
+	defer clear(data)
+	data, err = j.protect(name, data)
 	if err != nil {
 		return err
 	}
@@ -112,7 +147,10 @@ func (j *FileJournal) create(name string, value any) error {
 	}
 	// Never delete a partially written claim/receipt: it is an uncertain durable fact, not a retry
 	// token. A later open reports unknown instead of performing the tool again.
-	_, writeErr := f.Write(data)
+	n, writeErr := f.Write(data)
+	if writeErr == nil && n != len(data) {
+		writeErr = io.ErrShortWrite
+	}
 	if writeErr == nil {
 		writeErr = f.Sync()
 	}
@@ -122,6 +160,11 @@ func (j *FileJournal) create(name string, value any) error {
 	}
 	if closeErr != nil {
 		return closeErr
+	}
+	if j.encryption != nil {
+		if err := j.encryption.identity.CheckAccess(); err != nil {
+			return errors.Join(ErrOutcomeUnknown, err)
+		}
 	}
 	if runtime.GOOS != "windows" {
 		directory, err := j.root.Open(".")
@@ -149,6 +192,9 @@ func (j *FileJournal) Claim(ctx context.Context, op Operation) (ClaimResult, err
 	defer j.mu.Unlock()
 	if j.closed {
 		return ClaimResult{}, os.ErrClosed
+	}
+	if err = j.checkJournal(op); err != nil {
+		return ClaimResult{}, err
 	}
 	err = j.create(key+".claim", journalClaim{Digest: op.Digest})
 	if err == nil {
@@ -190,6 +236,9 @@ func (j *FileJournal) Complete(ctx context.Context, op Operation, receipt Receip
 	defer j.mu.Unlock()
 	if j.closed {
 		return os.ErrClosed
+	}
+	if err = j.checkJournal(op); err != nil {
+		return err
 	}
 	var claim journalClaim
 	if err = j.read(key+".claim", &claim); err != nil {
