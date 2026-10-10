@@ -211,3 +211,8 @@ Demo 用原 `-mode rekey-publication` 并显式加 `-profile terminal-persistenc
 `CopyTo` creates a verified read-only candidate with a fresh distinct key, preserving all original facts and the untouched source key budget. The authenticated marker survives reopen; there is no writer activation or automatic cutover. Retain source and published destination on uncertainty and reconcile by the original path/key. Demo rekey mode is offline and does not start an executor.
 
 维护受影响验证：4个新copy主例及原Root/unknown/owner/容量、Demo合计15主+12子通过，0失败/跳过；局部vet通过。原首轮新测试函数拼写编译红保留为工装错误，修正后未改产品断言。未重复未受影响4MiB/513或原全池。独立安装消费与提交清单归 `b9/python-go/maintenance/`，按其最终回执单列，不冒充全平台/掉电/cutover实证。
+
+
+B9 物理快照准入修复：先前只将完成大小截到配置帽来核密钥预算，导致 1MiB 配置接纳 1,228,800 字节计划、后续 put 必然满额。新 begin 首次接纳在原介质锁内按所有 active 计划的尚余对象、逐对象 base64 padding、双键索引和终态元数据估算完成快照上界；Python 另计外层 base64 与内部 64MiB JSON 帽，Go 加 AEAD 信封。物理上界独立于原逻辑 Capacity，采用保守编码预留，不承诺真实磁盘空闲或掉电保证。默认、旧逻辑帽、wire、AEAD 格式不变；加密临时文件仍沿原目录空间约束。旧版已接纳票据继续原键 query/幂等 begin/续办，不逐出、不伪终态；它们若原计划已超配置，仍可能在真实后续保存时拒绝，需保留原事实。新 admission 必须同时保留这些旧计划的完成预算。
+
+新反例按原体量在 begin 拒绝且源密文逐字节不变；两个并发票据接纳、冷重开后第三票据拒绝，前两份材料全部可同时持久化并按原 CAS 完成/拒绝；旧格式已接纳票据重开保真。原红及定向、独立安装消费回执归 `b9/python-go/physical-capacity/`，本轮不重复全池或未受影响 4MiB/513 门；旧绿色候选边界保留。没有新增协议、提高上限或缩小原失败正文。

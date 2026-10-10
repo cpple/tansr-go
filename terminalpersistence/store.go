@@ -341,9 +341,47 @@ func (s *FileStore) guard(before executor.Scope, ctx context.Context) error {
 	}
 	return s.fixed()
 }
+
+// completionBytes bounds the packed snapshot while every admitted transfer finishes.
+// Frozen digest/ref shapes bound each missing object plus its accepted-map entry by
+// 512 encoded bytes (including packState's nested JSON escaping), each new primary
+// row plus secondary mapping by 768, and root/result/progress growth by 4096 per
+// transfer. Existing begin/owner/base facts are already present in rawBytes. Raw
+// objects need base64 space with padding counted separately for every object.
+func completionBytes(st obj, rawBytes int) int64 {
+	total := int64(rawBytes) + 128 // persisted write/byte counter digit growth
+	for _, v := range m(st["transfers"]) {
+		row := m(v)
+		if m(row["transfer"])["status"] != "staging" {
+			continue
+		}
+		begin := m(row["begin"])
+		d := m(begin["declared"])
+		accepted := m(row["accepted"])
+		remaining := int64(n(d["bytes"]))
+		for key := range accepted {
+			remaining -= int64(n(m(m(st["objects"])[key])["byteLength"]))
+		}
+		count := int64(n(d["objects"]) - len(accepted))
+		total += 4*((remaining+2*count)/3) + 512*count + 768*int64(n(m(begin["index"])["addedCount"])) + 4096
+	}
+	return total
+}
+func (s *FileStore) reserveAdmission(st obj) error {
+	raw, err := s.pack(st)
+	if err != nil {
+		return AdapterError("capacity_exceeded")
+	}
+	defer clear(raw)
+	overhead := len(magic) + s.aead.NonceSize() + s.aead.Overhead()
+	if completionBytes(st, len(raw))+int64(overhead) > int64(s.options.MaxFileBytes) {
+		return AdapterError("capacity_exceeded")
+	}
+	return nil
+}
 func (s *FileStore) budget(st obj, rawBytes int) (err error) {
 	defer caught(&err)
-	writes, remaining := int64(1), int64(0)
+	writes := int64(1)
 	for _, v := range m(st["transfers"]) {
 		row := m(v)
 		if m(row["transfer"])["status"] != "staging" {
@@ -352,13 +390,8 @@ func (s *FileStore) budget(st obj, rawBytes int) (err error) {
 		d := m(m(row["begin"])["declared"])
 		a := m(row["accepted"])
 		writes += int64(n(d["objects"]) - len(a) + 2)
-		actual := 0
-		for key := range a {
-			actual += n(m(m(st["objects"])[key])["byteLength"])
-		}
-		remaining += int64(n(d["bytes"]) - actual + metadataReserve)
 	}
-	maximum := min(int64(s.options.MaxFileBytes), int64(rawBytes)+2*remaining+32768)
+	maximum := min(int64(s.options.MaxFileBytes), completionBytes(st, rawBytes))
 	need(int64(max(s.encryptions, uint64(n(st["writes"]))))+writes <= 1<<20 && int64(max(s.encryptedBytes, uint64(n(st["encryptedBytes"]))))+writes*maximum <= 1<<36, "capacity_exceeded")
 	return nil
 }
@@ -505,6 +538,11 @@ func (s *FileStore) Execute(ctx context.Context, input Request, owner Owner) (Re
 		return nil, AdapterError("read_only_copy")
 	}
 	state := m(detached(s.state))
+	newAdmission := false
+	if r["action"] == "begin" {
+		_, existing := m(state["transfers"])[str(r["transferId"])]
+		newAdmission = !existing
+	}
 	work := &engine{state: state}
 	recovery := func(proof obj) bool {
 		if s.options.AuthorizeRecovery == nil {
@@ -533,6 +571,13 @@ func (s *FileStore) Execute(ctx context.Context, input Request, owner Owner) (Re
 	}
 	commits := s.commits
 	if work.changed {
+		// New admissions reserve all pending completions under the original media lock.
+		// Older admitted tickets remain queryable/continuable; no format migration or eviction.
+		if newAdmission {
+			if e = s.reserveAdmission(state); e != nil {
+				return nil, e
+			}
+		}
 		if e = s.save(state, before, ctx); e != nil {
 			return nil, e
 		}
