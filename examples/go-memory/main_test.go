@@ -9,6 +9,7 @@ import (
 	"flag"
 	"github.com/tansrai/tansr-go/executor"
 	"github.com/tansrai/tansr-go/memorypublication"
+	"github.com/tansrai/tansr-go/terminalpersistence"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -259,5 +260,55 @@ func TestLocalStopStillPersistsKnownReceiptAndChecksCurrentScope(t *testing.T) {
 	}
 	if _, err := scopeReader(ctx, path); !errors.Is(err, context.Canceled) {
 		t.Fatal("already stopped initialization accepted", err)
+	}
+}
+
+func TestNewProfileOfflineRekeyReturnsOnlyReadOnlyCandidate(t *testing.T) {
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := executor.Scope{ApplicationScopeID: "app", EndUserID: "user", AuthorizationRevision: "1"}
+	identity := terminalpersistence.Identity{ApplicationScopeID: "app", EndUserID: "user", SourceID: "source", SourceGeneration: "1", DomainKey: "domain"}
+	o := options{profile: "terminal-persistence-v1", mode: "rekey-publication", executor: "device", file: filepath.Join(directory, "original.bin"), journal: filepath.Join(directory, "journal"), access: filepath.Join(directory, "scope.json"), identity: filepath.Join(directory, "identity.json"), target: filepath.Join(directory, "copy.bin")}
+	for path, value := range map[string]any{o.access: scope, o.identity: identity} {
+		raw, _ := json.Marshal(value)
+		if err = os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldKey, newKey := bytes.Repeat([]byte{3}, 32), bytes.Repeat([]byte{4}, 32)
+	t.Setenv("TANSR_MEMORY_KEY", hex.EncodeToString(oldKey))
+	t.Setenv("TANSR_MEMORY_NEW_KEY", hex.EncodeToString(newKey))
+	opts := terminalpersistence.Options{Path: o.file, Mode: "create", Key: oldKey, Identity: identity, CurrentScope: func() (executor.Scope, error) { return scope, nil }}
+	source, err := terminalpersistence.OpenFileStore(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Close()
+	original, _ := os.ReadFile(o.file)
+	if err = runCommand(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(o.journal); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("offline copy started journal/executor", err)
+	}
+	after, _ := os.ReadFile(o.file)
+	if !bytes.Equal(original, after) {
+		t.Fatal("source changed")
+	}
+	opts.Path = o.target
+	opts.Key = newKey
+	opts.Mode = "reopen"
+	copied, err := terminalpersistence.OpenFileStore(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer copied.Close()
+	if !copied.CopyVerifiedCutoverPending() {
+		t.Fatal("Demo copy granted writes")
+	}
+	if err = runCommand(context.Background(), o); err == nil {
+		t.Fatal("duplicate target allowed")
 	}
 }

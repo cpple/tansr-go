@@ -191,8 +191,23 @@ The B8 fix prevents a surviving permanent receipt from authorizing execution aga
 
 新 FileStore 用一次 AES-GCM 快照与原原子 replace/介质锁共同提交 Root、永久双键索引、transfer 原键结果和计数。只回收当前 Root、全部 staging base/已收对象均不再引用的正文块及描述页；永久索引 value、transfer 结果不回收，旧 Root 的 query 不承诺历史正文仍可 read。读和 lookup 必须固定当前 commitRoot，根变返回原冲突。原 owner 不符只可由可信 query-only 恢复回调准许原键观察，不授 put/commit。提交开始后取消、撤权或回执失回保持 unknown，需原路径/钥重开和原键 query；不自动重试 begin、换 ID 或清未决。
 
-实际默认/最高宿主配额为 active=8、staging=16MiB、receiptEntries=8192、transferFacts=4096、objects=16384、retainedBytes=32MiB；用户只能降低，head 返回真实值。独立密文快照帽为 128MiB，另留原临时文件空间，不宣称逻辑配额等于磁盘预留。每次写仍重写整个快照、冷开审计整个布局，未声称百万项/O(1)/性能达标。原有限钥次数/字节帽和未决必要写预留保留，帽耗尽拒新接纳并保原事实；新格式尚未提供 copy/轮钥或旧格式自动转换，不能套用旧六动作的迁移入口。无受支持备份、任意 delete、跨机接管、回滚检测或掉电保证。
+实际默认/最高宿主配额为 active=8、staging=16MiB、receiptEntries=8192、transferFacts=4096、objects=16384、retainedBytes=32MiB；用户只能降低，head 返回真实值。独立密文快照帽为 128MiB，另留原临时文件空间，不宣称逻辑配额等于磁盘预留。每次写仍重写整个快照、冷开审计整个布局，未声称百万项/O(1)/性能达标。原有限钥次数/字节帽和未决必要写预留保留，帽耗尽拒新接纳并保原事实；B9初始检查点未提供新格式copy/轮钥；后续下节补同格式只读复制，仍无旧格式自动转换。无受支持备份、任意 delete、跨机接管、回滚检测或掉电保证。
 
-Demo 保留旧 profile 默认值，新增 `--profile terminal-persistence-v1` 显式路径；新介质与 encrypted execution journal 使用两把独立 32 字节钥。配置 source/domain 来自可信宿主，不能采信网络正文来授恢复权。新格式不接受旧 copy/rekey Demo 模式。终端只实现机械存储，消费/归档业务策略仍在 Serve。
+Demo 保留旧 profile 默认值，新增 `--profile terminal-persistence-v1` 显式路径；新介质与 encrypted execution journal 使用两把独立 32 字节钥。配置 source/domain 来自可信宿主，不能采信网络正文来授恢复权。新格式仅复用下述显式 rekey-publication 模式，旧 journal/格式不自动迁移。终端只实现机械存储，消费/归档业务策略仍在 Serve。
 
 本批原门与安装消费回执归 `archive/PST-PLAN-20261009/dev-20261010-b9/python-go`；Go 的新/旧真实 HTTP 各 1/1 属已提交集成 `4d7a8d3`（`b9/go-integration/report.md`），Python 新 profile 实际 HTTP、Linux/macOS 运行、跨平台钥托管尚未验证。交付只本地提交，不推送、合并或发布；父卡与36断言仍由根统一结算。
+
+
+### B9 同格式保源加密复制（后续候选）
+
+`FileStore.CopyTo(ctx, CopyOptions{Path: newPath, Key: freshKey})` 在源独占锁及当前 scope 检查下审计完整状态，向显式不存在的新文件一次提交加密候选，再真实冷重开、逐状态核对。新钥必须不同；宿主须为每个目标提供 fresh key，不复用历史钥，本入口不是跨文件钥用量注册表。源密文/原路径/钥和有限用量不写、不重置；新钥独立计量。原 root、opaque 正文/对象、双键索引、永久 ticket/result/owner 和 staging 全部保留。
+
+返回 `*FileStore` 的 `CopyVerifiedCutoverPending()` 为 true。AEAD 认证的只读标记在普通 reopen 后仍有效，只准 head/read/lookup/query；begin/put/commit 包括幂等重放拒 `read_only_copy`。没有 activation/source retirement，source 继续保持原权限；缺共同源围栏时不能宣称切换完成。旧 SDK 对新标记拒绝，不静默当作可写。CopyOptions.CommitHook 沿原5个物理阶段，只传阶段名。
+
+Demo 用原 `-mode rekey-publication` 并显式加 `-profile terminal-persistence-v1`，其余 source/target/身份参数及 `TANSR_MEMORY_KEY`、不同的 `TANSR_MEMORY_NEW_KEY` 沿旧维护方式。它只复制单库、关闭自有句柄并打印 read-only/cutover pending，不启动 executor，不改配置。普通 Demo 运行拒只读候选；原 journal 的独立维护和旧六动作不变，不宣称两库原子切换。
+
+活源的 commit unknown 必须先关闭再以原路径/钥重开，不能凭该活句柄导出。复制失败不删源/已发布目标；后者用原目标路径/钥冷重开查验。已提交失回为 ErrUnknown，同目标重复拒绝，不据错误生成新 transfer 或自动覆盖。错误钥/身份/坏体不修复或清除原件。此入口无旧库自动导入、业务 cutover、跨机器接管或物理掉电保证。
+
+`CopyTo` creates a verified read-only candidate with a fresh distinct key, preserving all original facts and the untouched source key budget. The authenticated marker survives reopen; there is no writer activation or automatic cutover. Retain source and published destination on uncertainty and reconcile by the original path/key. Demo rekey mode is offline and does not start an executor.
+
+维护受影响验证：4个新copy主例及原Root/unknown/owner/容量、Demo合计15主+12子通过，0失败/跳过；局部vet通过。原首轮新测试函数拼写编译红保留为工装错误，修正后未改产品断言。未重复未受影响4MiB/513或原全池。独立安装消费与提交清单归 `b9/python-go/maintenance/`，按其最终回执单列，不冒充全平台/掉电/cutover实证。

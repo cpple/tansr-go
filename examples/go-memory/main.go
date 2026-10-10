@@ -110,7 +110,7 @@ func run(ctx context.Context, o options) error {
 	if o.profile != "memory-publication" && !persistence {
 		return errors.New("unsupported explicit storage profile")
 	}
-	if persistence && migrating {
+	if persistence && o.mode == "rekey-journal" {
 		return errors.New("new profile does not use legacy rekey media")
 	}
 	if o.mode != "create" && o.mode != "reopen" && !migrating {
@@ -180,6 +180,22 @@ func run(ctx context.Context, o options) error {
 		if err != nil {
 			return err
 		}
+		if persistence {
+			source, err := terminalpersistence.OpenFileStore(terminalpersistence.Options{Path: path, Mode: "reopen", Key: key, Identity: identity, CurrentScope: current})
+			if err != nil {
+				return err
+			}
+			migrated, copyErr := source.CopyTo(ctx, terminalpersistence.CopyOptions{Path: target, Key: nextKey})
+			closeErr := source.Close()
+			if migrated != nil {
+				closeErr = errors.Join(closeErr, migrated.Close())
+			}
+			if err = errors.Join(copyErr, closeErr); err != nil {
+				return err
+			}
+			fmt.Println("read-only copy verified; original retained; cutover pending; no writer activation")
+			return nil
+		}
 		if o.mode == "rekey-publication" {
 			migrated, err := memorypublication.Rekey(memorypublication.Options{Path: path, Key: key, Identity: identity, CurrentScope: current}, target, nextKey)
 			if err != nil {
@@ -223,6 +239,9 @@ func run(ctx context.Context, o options) error {
 			return err
 		}
 		defer store.Close()
+		if store.CopyVerifiedCutoverPending() {
+			return errors.New("read-only copy: cutover pending; executor not started")
+		}
 		host, e = terminalpersistence.NewHost(store, true)
 		name, digest = executor.TerminalPersistenceToolName, executor.TerminalPersistenceDefinitionDigest
 	} else {

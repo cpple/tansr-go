@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,8 @@ type FileStore struct {
 	aad                         []byte
 	state                       obj
 	closed, uncertain           bool
+	copyOnly                    bool
+	keyDigest                   [32]byte
 	commits                     uint64
 	encryptions, encryptedBytes uint64
 }
@@ -172,7 +175,11 @@ func ownerObject(o Owner) (obj, error) {
 }
 
 // OpenFileStore requires an existing protected parent and explicit create/reopen.
-func OpenFileStore(o Options) (_ *FileStore, err error) {
+func OpenFileStore(o Options) (*FileStore, error) {
+	return openFileStore(o, nil, false)
+}
+
+func openFileStore(o Options, seed obj, copyOnly bool) (_ *FileStore, err error) {
 	if !filepath.IsAbs(o.Path) || len(o.Key) != 32 || o.CurrentScope == nil || (o.Mode != "create" && o.Mode != "reopen") {
 		return nil, AdapterError("invalid_request")
 	}
@@ -206,7 +213,7 @@ func OpenFileStore(o Options) (_ *FileStore, err error) {
 	if e != nil {
 		return nil, e
 	}
-	s := &FileStore{options: o, root: root}
+	s := &FileStore{options: o, root: root, copyOnly: copyOnly, keyDigest: sha256.Sum256(o.Key)}
 	s.options.Key = nil
 	defer func() {
 		if err != nil {
@@ -258,6 +265,9 @@ func OpenFileStore(o Options) (_ *FileStore, err error) {
 	s.aad = append(append([]byte{}, magic...), identity...)
 	if !exists {
 		s.state = initial(o.Identity, o.Limits)
+		if seed != nil {
+			s.state = seed
+		}
 		if err = s.save(s.state, before, context.Background()); err != nil {
 			return nil, err
 		}
@@ -301,6 +311,15 @@ func (s *FileStore) load() error {
 	if e != nil {
 		return ErrIntegrity
 	}
+	marker, present := state["readOnlyCopy"]
+	if present && marker != true {
+		return ErrIntegrity
+	}
+	delete(state, "readOnlyCopy")
+	if s.copyOnly && !present {
+		return ErrIntegrity
+	}
+	s.copyOnly = present
 	if e = (&engine{state: state}).audit(s.options.Identity, s.options.Limits); e != nil {
 		return ErrIntegrity
 	}
@@ -349,8 +368,16 @@ func (s *FileStore) hook(stage string) error {
 	}
 	return nil
 }
+func (s *FileStore) pack(st obj) ([]byte, error) {
+	if !s.copyOnly {
+		return packState(st, s.options.MaxFileBytes)
+	}
+	packed := m(detached(st))
+	packed["readOnlyCopy"] = true
+	return packState(packed, s.options.MaxFileBytes)
+}
 func (s *FileStore) save(st obj, before executor.Scope, ctx context.Context) error {
-	raw, e := packState(st, s.options.MaxFileBytes)
+	raw, e := s.pack(st)
 	if e != nil {
 		return AdapterError("capacity_exceeded")
 	}
@@ -359,7 +386,7 @@ func (s *FileStore) save(st obj, before executor.Scope, ctx context.Context) err
 	}
 	st["writes"] = int(max(s.encryptions, uint64(n(st["writes"]))) + 1)
 	st["encryptedBytes"] = int(max(s.encryptedBytes, uint64(n(st["encryptedBytes"])))) + len(raw) + 128
-	raw, e = packState(st, s.options.MaxFileBytes)
+	raw, e = s.pack(st)
 	if e != nil {
 		return AdapterError("capacity_exceeded")
 	}
@@ -473,6 +500,9 @@ func (s *FileStore) Execute(ctx context.Context, input Request, owner Owner) (Re
 	}
 	if e = s.load(); e != nil {
 		return nil, e
+	}
+	if s.copyOnly && r["action"] != "head" && r["action"] != "read" && r["action"] != "lookup" && r["action"] != "query" {
+		return nil, AdapterError("read_only_copy")
 	}
 	state := m(detached(s.state))
 	work := &engine{state: state}
