@@ -11,8 +11,10 @@ import (
 	"github.com/tansrai/tansr-go/memorypublication"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReopenDefaultAndMissingInputs(t *testing.T) {
@@ -184,5 +186,78 @@ func TestOfflineCommandCancellationPreservesMigrationFailure(t *testing.T) {
 	opts.bindingRequest = "original-request"
 	if err = runCommand(ctx, opts); err != nil {
 		t.Fatal("normal interrupt behavior changed", err)
+	}
+}
+
+func TestLocalStopStillPersistsKnownReceiptAndChecksCurrentScope(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "scope.json")
+	scope := executor.Scope{ApplicationScopeID: "app", EndUserID: "user", AuthorizationRevision: "1"}
+	writeScope := func(value executor.Scope) {
+		raw, _ := json.Marshal(value)
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeScope(scope)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	current, err := scopeReader(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func() error {
+		got, err := current()
+		if err != nil {
+			return err
+		}
+		if got != scope {
+			return executor.ErrConflict
+		}
+		return nil
+	}
+	encryption := executor.JournalEncryption{
+		Key: bytes.Repeat([]byte{31}, 32), ApplicationScopeID: "app", EndUserID: "user", ExecutorID: "device", CheckAccess: check}
+	journal, err := executor.NewEncryptedFileJournal(filepath.Join(directory, "journal"), encryption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	op := executor.Operation{Protocol: executor.Protocol, OperationID: "original-op", SessionID: "original-session", Scope: scope,
+		Binding:  executor.Binding{BindingID: "original-binding", Revision: "1", Target: executor.Target{ExecutorID: "device", ConnectionID: "original-connection", ConnectionRevision: "1", WorkspaceID: "workspace", WorkspaceRevision: "1"}},
+		ToolName: "Lookup", Request: executor.Resource{Operation: "tool.invoke", Args: map[string]any{"name": "Lookup", "definitionDigest": strings.Repeat("a", 64), "argsJson": "{}"}}, ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}
+	op.Digest, err = executor.OperationDigest(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim, err := journal.Claim(ctx, op); err != nil || !claim.Claimed {
+		t.Fatal(claim, err)
+	}
+	stop() // handler has returned a known fact; outer shutdown must not erase it.
+	receipt := executor.Receipt{Protocol: executor.Protocol, ExecutorID: "device", ConnectionID: "original-connection", OperationID: op.OperationID, Digest: op.Digest, Status: "completed",
+		Result: &executor.Resource{Operation: "tool.invoke", Args: map[string]any{"resultJson": `{"status":"ok","content":[{"t":"text","text":"known durable result"}]}`}}}
+	if err := journal.Complete(context.WithoutCancel(ctx), op, receipt); err != nil {
+		t.Fatal("local stop erased known outcome", err)
+	}
+	if err = journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = executor.NewEncryptedFileJournal(filepath.Join(directory, "journal"), encryption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	claim, err := journal.Claim(context.Background(), op)
+	if err != nil || claim.Receipt == nil || !reflect.DeepEqual(*claim.Receipt, receipt) {
+		t.Fatal("original receipt absent", claim, err)
+	}
+	revoked := scope
+	revoked.AuthorizationRevision = "2"
+	writeScope(revoked)
+	if _, err := journal.Claim(context.Background(), op); err == nil {
+		t.Fatal("actual current authorization change accepted")
+	}
+	if _, err := scopeReader(ctx, path); !errors.Is(err, context.Canceled) {
+		t.Fatal("already stopped initialization accepted", err)
 	}
 }

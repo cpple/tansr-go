@@ -79,6 +79,26 @@ func readJSON(path string, value any) error {
 	d.DisallowUnknownFields()
 	return d.Decode(value)
 }
+
+// scopeReader reads the current trusted authorization independently of receipt delivery.
+func scopeReader(ctx context.Context, path string) (func() (executor.Scope, error), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Cancellation stops new execution, while an already known outcome still needs
+	// durable storage. Current authorization is independently reread for every IO.
+	return func() (executor.Scope, error) {
+		var scope executor.Scope
+		if err := readJSON(path, &scope); err != nil {
+			return scope, err
+		}
+		if err := wire.Validate("sdk2-ext-v1", "Scope", scope); err != nil {
+			return scope, err
+		}
+		return scope, nil
+	}, nil
+}
+
 func run(ctx context.Context, o options) error {
 	migrating := offlineRekeyMode(o.mode)
 	if o.mode != "create" && o.mode != "reopen" && !migrating {
@@ -102,25 +122,23 @@ func run(ctx context.Context, o options) error {
 	if e = readJSON(o.identity, &identity); e != nil {
 		return e
 	}
+	readCurrent, e := scopeReader(ctx, o.access)
+	if e != nil {
+		return e
+	}
+	// Publication operations and offline rekey keep their original cancellation checks.
 	current := func() (executor.Scope, error) {
-		var s executor.Scope
-		if e := ctx.Err(); e != nil {
-			return s, e
+		if err := ctx.Err(); err != nil {
+			return executor.Scope{}, err
 		}
-		if e := readJSON(o.access, &s); e != nil {
-			return s, e
-		}
-		if e := wire.Validate("sdk2-ext-v1", "Scope", s); e != nil {
-			return s, e
-		}
-		return s, nil
+		return readCurrent()
 	}
 	scope, e := current()
 	if e != nil {
 		return e
 	}
 	check := func() error {
-		s, e := current()
+		s, e := readCurrent()
 		if e != nil {
 			return e
 		}
