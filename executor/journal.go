@@ -216,6 +216,15 @@ func (j *FileJournal) Claim(ctx context.Context, op Operation) (ClaimResult, err
 	if err = j.checkJournal(op); err != nil {
 		return ClaimResult{}, err
 	}
+	// A surviving receipt is a permanent execution fact, even if the claim is
+	// missing or damaged. Never recreate its claim and authorize the tool again.
+	if _, statErr := j.root.Lstat(key + ".claim"); errors.Is(statErr, os.ErrNotExist) {
+		if _, receiptErr := j.root.Lstat(key + ".receipt"); !errors.Is(receiptErr, os.ErrNotExist) {
+			return ClaimResult{}, errors.Join(ErrOutcomeUnknown, receiptErr)
+		}
+	} else if statErr != nil {
+		return ClaimResult{}, statErr
+	}
 	err = j.create(key+".claim", journalClaim{Digest: op.Digest})
 	if err == nil {
 		return ClaimResult{Claimed: true}, nil

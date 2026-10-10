@@ -171,3 +171,16 @@ The cancellation regression was observed before the fix. The affected packages p
 B6 最终封存包消费：原 `TestRealServeEncryptedMemoryPublication` **1 passed、0 failed/skipped**，8条真实 receipt、原加密介质冷重开一致，Runner 静止与 Host 自然退出。首轮在存储创建前 request_conflict：共享 Host 的 publicationIdentity 使用 nested scope，旧 Go 夹具只读 flat app/user。仅在 integration 夹具显式解码并核对两种布局，冲突仍拒绝；不改共享 Host、产品身份校验或冻结协议。首轮红与修正后绿分存 `go-publication-b6.jsonl` / `go-publication-b6-r2.jsonl`，局部 integration vet 通过。消费使用根 `sealed-packages.json` 的 Serve `0cba9f28bf6cf6ef86f83da62302aee56e10a3be2d819cc50e51d1bd6e23f88d`、SDK `048ca882b055ec8793deb9ea3e5ca2f6549751c098f65dbe79c39d5291611d0c` 及原 API-client 包；工装 SHA256 `523660803c7fe9f878f0de64f3adf68db0089c0976560b40221e7e704443b053`，共享安装只读、数据用本次系统 tmp。无模型提示请求；未运行 go-memory 真二进制的新 Serve 闭会话恢复或多OS，不以本组代签这些边界。
 
 Final sealed B6 consumption passed the original publication integration: one test, eight actual receipts, identical encrypted storage after cold reopen, and graceful resource shutdown. The first run failed before storage creation because the old test fixture decoded only flat identity fields. The fixture now explicitly accepts the shared host's nested scope and rejects conflicting ownership; product validation and the frozen wire are unchanged. Both logs are retained. This does not claim a new real-process go-memory Demo scenario, closed-session recovery, or multi-OS execution.
+
+
+## 第八批：永久回执孤儿保护与加密安装消费
+
+本批从 `dccd25be4e426601e0ed121d93d4517f1fb6cdac` 接续，仅 `executor/journal.go` 有产品差量。原 `Claim` 在原 `.receipt` 仍存、对应 `.claim` 缺失时会重新创建 claim 并返回 Claimed=true，可能把永久 unknown/终态当作未执行。新增明文/加密两格先实跑原红；修复在创建前检查同键永久 receipt，存在、不可读或损坏均保守返回 outcome unknown，不重建 claim、不改 receipt。原并发 O_EXCL、原键摘要、当前 scope、owner、wire 和永久事实格式不变。损坏/错 AAD/截断/plaintext envelope 拒绝及实际临时快照密文扫描同时补入原测试。
+
+本批原本地门一次顺序执行：`go test -p 1 ./... -count=1 -json` 为 **157 主项、726 子项通过**，0失败；原真实 Serve 环境未提供的 **6主项、4子项跳过**单列，不当通过。vet、Windows/Linux/Darwin amd64 build、39份冻结合同对照、生成检查、gofmt均exit0；CGO=0，未跑race。三OS build不是三OS运行。
+
+本地模块 ZIP `v0.0.0-pstb8` 经 file GOPROXY 导入独立 GOMODCACHE，无 replace、无网络 registry；公开消费者实际完成六动作、敏感执行回执加密、原路径原钥重开及孤儿receipt拒绝重执。它是未发布内部候选包，不是公开发行。另复用根B8统一安装物 `serve-demo-candidate-UCKa95`，原 `TestRealServeEncryptedMemoryPublication` **1/1通过**、8条真实回执、加密冷开一致、模型调用0；原cleanup等待Host自然exit0并释放自有临时根。首次工装误用了不存在的Node路径，保留启动红，改为已安装 `C:/nvm4w/nodejs/node.exe` 后同一原单例通过；SDK/共享Host未为此改动。
+
+完整证据在 `J:/tansr/archive/PST-PLAN-20261009/dev-20261010-b8/languages/go/`：`orphan-receipt-red.jsonl`、`journal-green.jsonl`、`unit.log`、`unit-summary.json`、`gates.json`、`package-manifest.json`、`installed-module.log`、`serve-publication-b8-r2.jsonl`。原A25—30逐格索引在同级 `pst05-functional-assessment.json`，Archive页链/附件/pending ACK/coverage沿未改实现的既有真实回执独列，不以publication回执代签。只本地提交原PST分支，不合main、不push、不改冻结schema/lock；九端总断言由根唯一结算。Linux/macOS实机、物理掉电和正式发行未在本批执行。
+
+The B8 fix prevents a surviving permanent receipt from authorizing execution again when its claim is missing. Both plaintext and encrypted red cases are retained. Local gates, an offline module-cache consumer, and the shared sealed B8 Serve publication test passed. The ordinary local gate's ten environment-dependent Serve entries remain explicitly skipped; they are not added to the dedicated real-Serve result. No wire, owner policy, or receipt format changed.
