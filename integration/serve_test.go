@@ -39,6 +39,35 @@ type fixture struct {
 	ManifestRevision      int                        `json:"manifestRevision"`
 }
 
+// decodeFixture accepts both the original local Go host and the sealed shared host.
+// Nested identity is checked explicitly; missing or conflicting ownership is not inferred.
+func decodeFixture(data []byte) (fixture, error) {
+	var result fixture
+	if err := json.Unmarshal(data, &result); err != nil {
+		return result, err
+	}
+	var nested struct {
+		PublicationIdentity struct {
+			Scope *memorypublication.Identity `json:"scope"`
+		} `json:"publicationIdentity"`
+	}
+	if err := json.Unmarshal(data, &nested); err != nil {
+		return result, err
+	}
+	identity := &result.PublicationIdentity
+	if scope := nested.PublicationIdentity.Scope; scope != nil {
+		if (identity.ApplicationScopeID != "" && identity.ApplicationScopeID != scope.ApplicationScopeID) ||
+			(identity.EndUserID != "" && identity.EndUserID != scope.EndUserID) {
+			return result, errors.New("fixture publication identity conflict")
+		}
+		identity.ApplicationScopeID, identity.EndUserID = scope.ApplicationScopeID, scope.EndUserID
+	}
+	if identity.SourceID != "" && (identity.ApplicationScopeID != result.ApplicationScopeID || identity.EndUserID != result.EndUserID) {
+		return result, errors.New("fixture publication scope mismatch")
+	}
+	return result, nil
+}
+
 // loseAckResponse forwards the real request and drains its real success response,
 // then models a connection loss. It never fabricates a Serve response or receipt.
 type loseAckResponse struct {
@@ -152,8 +181,8 @@ func startFixture(t *testing.T, mode string) fixture {
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "TANSR_GO_FIXTURE ") {
-				var f fixture
-				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "TANSR_GO_FIXTURE ")), &f); err != nil {
+				f, err := decodeFixture([]byte(strings.TrimPrefix(line, "TANSR_GO_FIXTURE ")))
+				if err != nil {
 					scanDone <- err
 					return
 				}
