@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,9 @@ import (
 
 // 这些测试只有显式指定 CLI 工作区或同源便携宿主时运行，普通 Go 消费者不安装 Node。
 type fixture struct {
+	Profile               string   `json:"profile"`
+	Controls              []string `json:"controls"`
+	controller            *fixtureController
 	PublicationIdentity   memorypublication.Identity `json:"publicationIdentity"`
 	BaseURL               string                     `json:"baseURL"`
 	Token                 string                     `json:"token"`
@@ -37,6 +41,70 @@ type fixture struct {
 	DefinitionDigest      string                     `json:"definitionDigest"`
 	Declaration           json.RawMessage            `json:"declaration"`
 	ManifestRevision      int                        `json:"manifestRevision"`
+}
+
+// fixtureController multiplexes bounded stdin requests with the existing ready frame.
+// It is test-host control only; every device operation still traverses real HTTP.
+type fixtureControlReply struct {
+	RequestID string          `json:"requestId"`
+	OK        bool            `json:"ok"`
+	Result    json.RawMessage `json:"result"`
+	Error     string          `json:"error"`
+}
+type fixtureController struct {
+	mu      sync.Mutex
+	stdin   io.WriteCloser
+	next    uint64
+	pending map[string]chan fixtureControlReply
+	done    chan struct{}
+}
+
+func (f fixture) control(ctx context.Context, command map[string]any, out any) error {
+	c := f.controller
+	if c == nil {
+		return errors.New("fixture controls unavailable")
+	}
+	c.mu.Lock()
+	select {
+	case <-c.done:
+		c.mu.Unlock()
+		return errors.New("fixture exited")
+	default:
+	}
+	c.next++
+	id := fmt.Sprintf("go-control-%d", c.next)
+	input := make(map[string]any, len(command)+1)
+	for k, v := range command {
+		input[k] = v
+	}
+	input["requestId"] = id
+	raw, err := json.Marshal(input)
+	if err != nil || len(raw) > 4096 {
+		c.mu.Unlock()
+		return errors.New("invalid bounded fixture control")
+	}
+	reply := make(chan fixtureControlReply, 1)
+	c.pending[id] = reply
+	_, err = c.stdin.Write(append(raw, '\n'))
+	c.mu.Unlock()
+	defer func() { c.mu.Lock(); delete(c.pending, id); c.mu.Unlock() }()
+	if err != nil {
+		return err
+	}
+	select {
+	case value := <-reply:
+		if !value.OK {
+			return fmt.Errorf("fixture control %s: %s", command["command"], value.Error)
+		}
+		if out == nil {
+			return nil
+		}
+		return json.Unmarshal(value.Result, out)
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.done:
+		return errors.New("fixture exited before control reply")
+	}
 }
 
 // decodeFixture accepts both the original local Go host and the sealed shared host.
@@ -175,9 +243,12 @@ func startFixture(t *testing.T, mode string) fixture {
 		t.Fatal(err)
 	}
 	ready := make(chan fixture, 1)
+	controls := &fixtureController{stdin: stdin, pending: make(map[string]chan fixtureControlReply), done: make(chan struct{})}
 	scanDone := make(chan error, 1)
 	go func() {
+		defer close(controls.done)
 		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 4096), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "TANSR_GO_FIXTURE ") {
@@ -186,7 +257,22 @@ func startFixture(t *testing.T, mode string) fixture {
 					scanDone <- err
 					return
 				}
+				f.controller = controls
 				ready <- f
+			} else if strings.HasPrefix(line, "TANSR_GO_CONTROL ") {
+				var reply fixtureControlReply
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "TANSR_GO_CONTROL ")), &reply); err != nil {
+					scanDone <- err
+					return
+				}
+				controls.mu.Lock()
+				if pending := controls.pending[reply.RequestID]; pending != nil {
+					select {
+					case pending <- reply:
+					default:
+					}
+				}
+				controls.mu.Unlock()
 			}
 		}
 		scanDone <- scanner.Err()
@@ -194,8 +280,10 @@ func startFixture(t *testing.T, mode string) fixture {
 	waited := make(chan error, 1)
 	go func() { waited <- cmd.Wait() }()
 	t.Cleanup(func() {
+		controls.mu.Lock()
 		_, _ = io.WriteString(stdin, "stop\n")
 		_ = stdin.Close()
+		controls.mu.Unlock()
 		select {
 		case err := <-waited:
 			if err != nil {

@@ -9,11 +9,12 @@ import { createInterface } from 'node:readline';
 const cliRoot = resolve(process.argv[2] ?? '');
 const directory = resolve(process.argv[3] ?? '');
 const mode = process.argv[4] ?? 'session';
-if (!process.argv[2] || !process.argv[3]) throw new Error('usage: serve-fixture.mjs CLI_ROOT TEMP_DIRECTORY [session|execution|archive]');
+if (!process.argv[2] || !process.argv[3]) throw new Error('usage: serve-fixture.mjs CLI_ROOT TEMP_DIRECTORY [session|execution|execution-demo|archive|archive-offload|publication|persistence]');
 const load = relative => import(pathToFileURL(join(cliRoot, relative)).href);
 const contract = JSON.parse(await readFile(join(cliRoot, 'packages/server/contract/api-manifest.json'), 'utf8'));
 let cleanup;
 let info;
+let control;
 
 if (mode === 'archive' || mode === 'archive-offload') {
   const [{ createServeArchiveHost }, { createServeOffloadArchiveHost }, { createMemoryBlobStore },
@@ -46,9 +47,9 @@ if (mode === 'archive' || mode === 'archive-offload') {
     v2: { authenticate: request => request.headers.authorization === 'Bearer go-integration-token' ? { endUserId: 'go-user' } : null } });
   cleanup = async () => { await server.close(); await server.settleResources?.(); await host.dispose(); };
   info = { baseURL: server.url };
-} else if (mode === 'session' || mode === 'execution' || mode === 'execution-demo' || mode === 'publication') {
+} else if (mode === 'session' || mode === 'execution' || mode === 'execution-demo' || mode === 'publication' || mode === 'persistence') {
   const [{ startServer, createAgentSessionFactory }, { createServeAgentSessionStore }, { createFakePlatform, FAKE_API_BASE },
-    { openSqliteArchiveSpool }, { defaultAppCapabilities }, { clientToolDefinitionDigest }] = await Promise.all([
+    { openSqliteArchiveSpool, readArchiveSpoolOperationFacts }, { defaultAppCapabilities }, { clientToolDefinitionDigest }] = await Promise.all([
     load('packages/server/src/index.ts'), load('packages/server/src/v2/agent-session-store.ts'),
     load('packages/server/test/fake-platform-fetch.ts'), load('packages/kernel/src/index.ts'),
     load('packages/sdk/src/index.ts'), load('packages/server/src/v2/agent-execution.ts'),
@@ -60,7 +61,11 @@ if (mode === 'archive' || mode === 'archive-offload') {
   const caps = defaultAppCapabilities('desktop');
   const executionEnabled = mode !== 'session';
   const publicationIdentity = { kind: 'client-managed', domain: 'go-app/go-user', applicationScopeId: 'go-app', endUserId: 'go-user', sourceId: 'go-memory-source', sourceGeneration: '1' };
-  const publication = mode === 'publication' ? await load('packages/server/src/v2/memory-management.ts') : undefined;
+  const publicationEnabled = mode === 'publication' || mode === 'persistence';
+  let publicationMode = 'create', transitioning = false, pendingCreates = 0;
+  const handles = new Map();
+  const publication = publicationEnabled ? await load('packages/server/src/v2/memory-management.ts') : undefined;
+  const lifecycleAccess = publicationEnabled ? await load('packages/server/src/v2/memory-lifecycle.ts') : undefined;
   const fake = createFakePlatform({ bundleExtra: { capabilities: { ...caps, tools: { ...caps.tools, customTools: true },
     ...(executionEnabled ? { execution: { version: 'bound-device-v1', boundDevice: { tools: { customTools: true } } } } : {}) }, app: { platform: 'desktop' } } });
   // Same public declaration as examples/go-tools. A mismatch is caught by the
@@ -94,20 +99,115 @@ if (mode === 'archive' || mode === 'archive-offload') {
     return new Response(frame('t.open', { exchangeId: `go-${number}`, model: body.model, protocol: 'twp/1' }) + content,
       { headers: { 'content-type': 'text/event-stream' } });
   };
-  const build = createAgentSessionFactory({ cwd: directory, store: createServeAgentSessionStore({ dir: join(directory, 'sessions'), ...(mode === 'publication' ? { ownership: {} } : {}) }),
+  const build = createAgentSessionFactory({ cwd: directory, store: createServeAgentSessionStore({ dir: join(directory, 'sessions'), ...(publicationEnabled ? { ownership: {} } : {}) }),
     platform: { apiBaseUrl: FAKE_API_BASE, appId: 'go-app', appKey: 'synthetic-fixture-key', fetchImpl,
-      ...(mode === 'publication' ? { memoryPublicationFor: () => ({ identity: publicationIdentity, mode: 'create', enabled: () => true, balance: () => null, recallSelector: false }) } : {}) },
+      ...(publicationEnabled ? { memoryPublicationFor: () => ({ identity: publicationIdentity, mode: publicationMode, ...(mode === 'persistence' ? { profile: 'terminal-persistence-v1' } : {}), enabled: () => true, balance: () => null, recallSelector: false }) } : {}) },
     ...(executionEnabled ? { execution: { applicationScopeId: 'go-app',
       authorize: request => ({ controller: request.headers.authorization === 'Bearer go-integration-token',
         ...(request.headers.authorization === 'Bearer go-integration-token' ? { executorId: 'go-executor' } : {}) }),
-      readPolicy: async () => ({ authorizationRevision: '1', tools: mode === 'publication' ? ['SearchMemory'] : [declaration.name] }),
+      readPolicy: async () => ({ authorizationRevision: '1', tools: publicationEnabled ? ['SearchMemory'] : [declaration.name] }),
       spoolFor: () => ({ spool, bindingId: 'go-control' }) } } : {}) });
-  const server = await startServer({ ...(mode === 'publication' ? { terminal: { contract: 'terminal-services-v1' } } : {}), host: '127.0.0.1', port: 0, token: 'unused-legacy', heartbeatMs: 0, readyFrame: 'none',
+  const createSession = build.factory.create.bind(build.factory);
+  build.factory.create = async init => {
+    if (transitioning) throw new Error('publication transition in progress');
+    pendingCreates++;
+    try { const value = await createSession(init); handles.set(value.handle.sessionId, value.handle); return value; }
+    finally { pendingCreates--; }
+  };
+  const facts = () => {
+    const batch = readArchiveSpoolOperationFacts(spool, { bindingId: 'go-control', operationKeyPrefix: 'execution-', maxBodyBytes: 262144 });
+    if (!batch) throw new Error('real execution facts unavailable');
+    const read = id => {
+      const entry = batch.entries.find(value => value.entryId === id);
+      if (!entry) return null;
+      if (!entry.complete || entry.bodyState !== 'retained' || !entry.body) throw new Error('execution fact body unavailable');
+      return JSON.parse(Buffer.from(entry.body).toString('utf8'));
+    };
+    const operations = batch.operations.filter(value => value.reservation.operationKey.startsWith('execution-request-')).map(value => {
+      const key = value.reservation.operationKey, operation = read(key);
+      if (!operation) throw new Error('execution request unavailable');
+      const args = operation.request.operation === 'tool.invoke' ? JSON.parse(operation.request.args.argsJson) : null;
+      const receipt = read(`execution-result-${operation.operationId}`);
+      const result = batch.operations.find(item => item.reservation.operationKey === `execution-result-${operation.operationId}`);
+      return { operationId: operation.operationId, sessionId: operation.sessionId, digest: operation.digest, expiresAt: operation.expiresAt,
+        toolName: operation.toolName, tool: operation.request.args.name ?? null, action: args?.action ?? null,
+        transferId: args?.transferId ?? null, intentSha256: args?.intentSha256 ?? null,
+        resultState: result?.state ?? null, receiptStatus: receipt?.status ?? null,
+        receiptBodySha256: batch.entries.find(item => item.entryId === `execution-result-${operation.operationId}`)?.witness.bodySha256 ?? null };
+    });
+    return { mode, publicationMode, modelExchanges: exchange, operations,
+      sessions: [...handles.values()].map(handle => ({ sessionId: handle.sessionId, status: handle.status() })),
+      spool: spool.snapshot() };
+  };
+  control = async value => {
+    if (value.command === 'facts') return facts();
+    if (!publicationEnabled || transitioning || pendingCreates !== 0) throw new Error('publication lifecycle is unavailable or in flight');
+    transitioning = true;
+    try {
+      if (value.command === 'archive-receipts') {
+        const handle = handles.get(value.sessionId);
+        if (mode !== 'persistence' || !handle || handle.endUserId !== 'go-user' || handle.status() !== 'idle' ||
+            !Number.isSafeInteger(value.limit) || value.limit < 1 || value.limit > 256 ||
+            !Array.isArray(value.operationIds) || value.operationIds.length < 1 || value.operationIds.length > value.limit ||
+            new Set(value.operationIds).size !== value.operationIds.length ||
+            value.operationIds.some(id => typeof id !== 'string' || [...id].length < 1 || [...id].length > 256 || /[\u0000-\u001f\u007f]/.test(id)) ||
+            value.consume !== undefined && typeof value.consume !== 'boolean') throw new Error('invalid bounded archive control');
+        const lifecycle = lifecycleAccess.getPlatformMemoryLifecycle(handle), source = lifecycle?.management;
+        const check = () => {
+          if (!source || handles.get(value.sessionId) !== handle || handle.status() !== 'idle' ||
+              lifecycleAccess.getPlatformMemoryLifecycle(handle) !== lifecycle || lifecycle.management !== source || !lifecycle.status().enabled ||
+              source.identity.applicationScopeId !== 'go-app' || source.identity.endUserId !== 'go-user' ||
+              source.identity.sourceId !== publicationIdentity.sourceId || source.identity.sourceGeneration !== publicationIdentity.sourceGeneration)
+            throw new Error('archive publisher changed');
+          source.assertCurrent();
+        };
+        check();
+        // Only original durable terminal facts qualify. No historical receipt is fabricated.
+        for (const id of value.operationIds) {
+          const original = await source.status(id); check();
+          if (!original || !(original.status === 'failed' || original.status === 'committed' && original.durable &&
+              (original.consumed || value.consume === true))) throw new Error('original receipt is not archivable');
+        }
+        if (value.consume === true) for (const id of value.operationIds) {
+          const original = await source.status(id); check();
+          if (original.status === 'committed') { await source.consume(id); check(); }
+        }
+        const archived = await source.archiveReceipts(value.operationIds); check();
+        return { archived, explicitlyConsumed: value.consume === true, ...facts() };
+      }
+      if (value.command === 'settle-publication') {
+        const handle = handles.get(value.sessionId);
+        if (!handle || handle.endUserId !== 'go-user' || handle.status() !== 'idle') throw new Error('explicit idle publisher is required');
+        // The executor must keep polling; this does not close a session or manufacture an execution receipt.
+        await handle.settleResources();
+        if (handles.get(value.sessionId) !== handle || handle.status() !== 'idle') throw new Error('publisher changed during settlement');
+        return { liveSettledSessionId: value.sessionId, ...facts() };
+      }
+      if (value.command === 'set-publication-mode' && value.mode === 'reopen') {
+        if (handles.size === 0) throw new Error('no prior publisher');
+        for (const handle of handles.values()) {
+          if (handle.endUserId !== 'go-user' || handle.status() !== 'ended') throw new Error('prior publisher has not ended');
+          await handle.settleResources();
+          if (handle.status() !== 'ended') throw new Error('publisher changed during settlement');
+        }
+        publicationMode = 'reopen';
+        return { quiescentSessions: [...handles.keys()], ...facts() };
+      }
+      throw new Error('unknown fixture control');
+    } finally { transitioning = false; }
+  };
+  const server = await startServer({ ...(publicationEnabled ? { terminal: { contract: 'terminal-services-v1' } } : {}), host: '127.0.0.1', port: 0, token: 'unused-legacy', heartbeatMs: 0, readyFrame: 'none',
     createSession: { create() { throw new Error('legacy SDK1 entry is unused'); } },
     v2: { authenticate: request => request.headers.authorization === 'Bearer go-integration-token' ? { endUserId: 'go-user' } : null,
       createSession: build.factory, store: build.storeReader, governance: { sweepIntervalMs: 0 } } });
-  cleanup = async () => { await server.close(); await build.flush(); spool.close(); };
-  info = { baseURL: server.url, declaration, definitionDigest: clientToolDefinitionDigest(declaration),
+  cleanup = async () => {
+    const failures = [];
+    for (const close of [() => server.close(), () => server.settleResources(), () => build.flush(), () => spool.close()]) {
+      try { await close(); } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, 'fixture cleanup failed');
+  };
+  info = { baseURL: server.url, ...(publicationEnabled ? { profile: mode === 'persistence' ? 'terminal-persistence-v1' : 'terminal-services-v1', controls: ['facts', 'settle-publication', 'set-publication-mode', ...(mode === 'persistence' ? ['archive-receipts'] : [])] } : {}), declaration, definitionDigest: clientToolDefinitionDigest(declaration),
     ...(publication ? { publicationIdentity: { applicationScopeId: 'go-app', endUserId: 'go-user', sourceId: publicationIdentity.sourceId, sourceGeneration: publicationIdentity.sourceGeneration, domainKey: publication.memoryPublicationKey(publicationIdentity) } } : {}) };
 } else {
   throw new Error('unknown fixture mode');
@@ -116,6 +216,22 @@ if (mode === 'archive' || mode === 'archive-offload') {
 process.stdout.write('TANSR_GO_FIXTURE ' + JSON.stringify({ ...info, mode, manifestRevision: contract.revision,
   token: 'go-integration-token', applicationScopeId: 'go-app', endUserId: 'go-user', authorizationRevision: '1' }) + '\n');
 const lines = createInterface({ input: process.stdin });
-await new Promise(resolveDone => { lines.once('line', resolveDone); lines.once('close', resolveDone); });
-lines.close();
-await cleanup();
+try {
+  for await (const line of lines) {
+    if (line.trim() === '' || line.trim() === 'stop') break;
+    let request;
+    try {
+      if (Buffer.byteLength(line) > 4096) throw new Error('fixture control exceeds bound');
+      request = JSON.parse(line);
+      const fields = Object.keys(request).sort().join(',');
+      if (!request || typeof request !== 'object' || Array.isArray(request) ||
+          typeof request.requestId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(request.requestId) ||
+          !['command,requestId', 'command,requestId,sessionId', 'command,mode,requestId',
+            'command,limit,operationIds,requestId,sessionId', 'command,consume,limit,operationIds,requestId,sessionId'].includes(fields) || !control) throw new Error('invalid fixture control');
+      const result = await control(request);
+      process.stdout.write('TANSR_GO_CONTROL ' + JSON.stringify({ requestId: request.requestId, ok: true, result }) + '\n');
+    } catch (error) {
+      process.stdout.write('TANSR_GO_CONTROL ' + JSON.stringify({ requestId: request?.requestId ?? null, ok: false, error: String(error?.message ?? error) }) + '\n');
+    }
+  }
+} finally { lines.close(); await cleanup(); }

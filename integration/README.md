@@ -20,7 +20,7 @@ Windows、Linux 和 macOS 可以共用同一份构建产物，无需把 CLI 整�
 node integration/build-serve-fixture.mjs --cli-root J:/tansr/tansr-cli --source-commit 3a5ba4f87b387b375e2b5b86bfceeda2c6f6db54 --out J:/tansr/archive/GO-02-runtime-release-20261007/fixture/candidate
 ```
 
-产出 `serve-fixture.mjs` 和 `serve-fixture.provenance.json`。构建器先核对 Go 合同锁的 39 份来源文件，复用 CLI 单文件 ESM 构建配置，将原夹具确定引用的十个模块替换成静态源导入，再将其真实依赖一起打包。档案 helper 原本按 `import.meta.url` 读取的冻结 schema 使用完全相同 UTF-8 字节内嵌，仍由原 `JSON.parse` 和原默认值提取逻辑处理。运行时外部依赖只允许 Node 内建模块；不存在用假实现代替内核、SQLite、HTTP 路由或权限逻辑的打包分支。
+产出 `serve-fixture.mjs` 和 `serve-fixture.provenance.json`。构建器先核对 Go 合同锁的 39 份来源文件，复用 CLI 单文件 ESM 构建配置，将原夹具确定引用的十二个模块替换成静态源导入，再将其真实依赖一起打包。档案 helper 原本按 `import.meta.url` 读取的冻结 schema 使用完全相同 UTF-8 字节内嵌，仍由原 `JSON.parse` 和原默认值提取逻辑处理。运行时外部依赖只允许 Node 内建模块；不存在用假实现代替内核、SQLite、HTTP 路由或权限逻辑的打包分支。
 
 来源记录包含 CLI commit/tree、构建脚本与原夹具指纹、实际输入文件及构建文件哈希、冻结资源哈希、esbuild/Node 版本和产物 SHA-256。复制两份产物到各端并核对同一 SHA 后执行：
 
@@ -62,3 +62,21 @@ TANSR_GO_SERVE_FIXTURE=/tmp/test-host/serve-fixture.mjs go test ./... -count=1 -
 本组不会绕过能力围栏或把未装配能力改报成功。真实 Serve 接口若拒绝合法初始化链，测试会保留明确失败，应修复对应实现后重跑；不能以跳过该链、改走旧路由或私有 handler 替代验收。
 
 Demo 子进程只传入本组的合成短期令牌与合成加密密钥，不读取宿主的令牌文件。命令产物同样仅留在测试临时目录，长期运行的工具命令在验收完成后由测试回收。
+
+## 显式 terminal-persistence-v1 真实链（PST-05）
+
+`TestRealServeTerminalPersistencePermanentKeysAndReopen` 复用同一夹具的 `persistence` 模式、公开 `/api`、Go `terminalpersistence` Store/Host 和加密 execution journal。旧 `publication` 模式及旧专用合同保留；新模式只登记 `TansrTerminalPersistenceV1` 的冻结摘要，不使用 ready 中业务工具的 `definitionDigest`。
+
+```powershell
+$env:TANSR_GO_SERVE_CLI_ROOT = 'J:/tansr/tansr-cli'
+$env:GOMAXPROCS = '2'
+go test ./integration -run '^TestRealServeTerminalPersistencePermanentKeysAndReopen$' -count=1 -timeout 180s -v
+```
+
+该单条链完成真实 pin、已提交原回执的显式消费与归档、归档后永久双键查找、原请求重放和次键冲突，随后关闭原会话及两份介质，以 `reopen` 打开并绑定新会话，再查原键。原请求重放不得产生新的 begin/put/commit。首次真实 commit 执行回执在 Serve 返回 HTTP 200 后被运输层丢弃，Runner 查询同一 operation/digest；关闭重开后的 journal 仍返回同一 receipt，原 transfer 查询仍给出原结果。这是已受理 ACK 失回恢复，不冒称终态 unknown 的新绑定恢复或 Serve 进程重启。
+
+stdin `TANSR_GO_CONTROL` 只用于内部验收宿主的 `facts`、`settle-publication`、`set-publication-mode` 和 `archive-receipts`。归档控制必须指定现存 idle session、非空原 operationIds 和 1–256 的显式 limit；实际数量不得超过 limit。缺省不代消费，未消费的 committed 回执原样拒绝。测试明确传 `consume: true` 后，宿主先核原状态、同生命周期和来源，再调用原 `source.consume` 与 `source.archiveReceipts`。不新增 HTTP 路由、不改造历史回执、不冒称模型或最终用户自动消费。测试模型调用数断言为 0。
+
+先通过 `settle-publication` 等待原初始化/命令后台资源释放，再发新的写命令；不能以重试绕过 busy。旧会话全部 ended 且资源收尾后，才显式选择下一会话的 `reopen`。两份原介质不删除、不自动迁移、不开空替代。公开 Store 的原 transfer 查询和真实 HTTP 的原 execution 状态分别核验，不能互相代签。
+
+源码加载模式适用于本地开发；便携包仍要求精确 HEAD、tracked clean、原 39 份锁和新增两份机器资产字节一致。新增 lifecycle accessor 仅在构建器确切 reviewedModules 集合内放行，未放松动态导入或清洁提交门。该宿主依旧是内部源码夹具，不是 npm 三包公开消费。此单条也不替代 257/513、4 MiB、全平台或完整门禁。

@@ -44,6 +44,17 @@ for (const row of rows) {
   if (digest(actual) !== row.sha256) throw new Error(`Frozen contract source differs: ${source}`);
 }
 
+// The approved new profile is a separate sidecar, never a rewrite of the old 39-file lock.
+const persistenceInputs = [];
+for (const [name, sha256] of [
+  ['terminal-persistence-v1.schema.json', '47387fb03308d00244e876a3bb429e24b81ac8d94d5f611aeda43e03b7c8b16c'],
+  ['terminal-persistence-v1.golden.json', '4b2c492ae590fda9447a5a53d13f3f7a935956c929cc23441a765947e3ef6503'],
+]) {
+  const local = await readFile(join(goRoot, 'contract', name)), source = await readFile(join(cliRoot, 'doc/rfc', name));
+  if (digest(local) !== sha256 || digest(source) !== sha256) throw new Error(`Approved persistence sidecar differs: ${name}`);
+  persistenceInputs.push({ path: `doc/rfc/${name}`, bytes: source.length, sha256 });
+}
+
 const requireCLI = createRequire(join(cliRoot, 'package.json'));
 const esbuild = requireCLI('esbuild');
 // Reuse CLI's single-file ESM profile, including original text/catalog loaders,
@@ -52,13 +63,21 @@ const { tansrdEsmProfile } = await import(pathToFileURL(join(cliRoot, 'build', '
 const sourceProfile = tansrdEsmProfile({ isRelease: false, channel: 'dev' });
 const fixturePath = join(integrationRoot, 'serve-fixture.mjs');
 const fixtureBytes = await readFile(fixturePath);
+const reviewedModules = new Set([
+  'packages/server/src/extensions/archive-host.ts', 'packages/server/src/extensions/offload.ts',
+  'packages/kernel/src/index.ts', 'tests/sdk2/serve-archive-host.helper.ts', 'packages/testkit/src/index.ts',
+  'packages/server/src/index.ts', 'packages/server/src/v2/agent-session-store.ts',
+  'packages/server/test/fake-platform-fetch.ts', 'packages/sdk/src/index.ts',
+  'packages/server/src/v2/agent-execution.ts', 'packages/server/src/v2/memory-management.ts',
+  'packages/server/src/v2/memory-lifecycle.ts',
+]);
 const moduleInputs = new Set();
 let source = fixtureBytes.toString('utf8').replace(/\bload\('([^']+)'\)/g, (_match, name) => {
-  if (!/^(packages|tests)\/[A-Za-z0-9_./-]+\.ts$/.test(name) || name.includes('..')) throw new Error(`Unexpected fixture import: ${name}`);
+  if (!reviewedModules.has(name)) throw new Error(`Unexpected fixture import: ${name}`);
   moduleInputs.add(name);
   return `import(${JSON.stringify(slash(join(cliRoot, name)))})`;
 });
-if (moduleInputs.size !== 11) throw new Error(`The reviewed real source module set changed (${moduleInputs.size}); review fixture input closure`);
+if (moduleInputs.size !== reviewedModules.size || [...reviewedModules].some(name => !moduleInputs.has(name))) throw new Error(`The reviewed real source module set changed (${moduleInputs.size}); review fixture input closure`);
 source = source.replace(/^const load = relative => import\(pathToFileURL\(join\(cliRoot, relative\)\)\.href\);\r?\n/m, '');
 const manifestStatement = "const contract = JSON.parse(await readFile(join(cliRoot, 'packages/server/contract/api-manifest.json'), 'utf8'));";
 if (!source.includes(manifestStatement) || /\bload\(/.test(source)) throw new Error('Fixture load/manifest anchors changed; do not emit a partial source bundle');
@@ -133,7 +152,7 @@ const metadata = {
   builder: { path: 'integration/build-serve-fixture.mjs', bytes: scriptBytes.length, sha256: digest(scriptBytes) },
   freezeLock: { path: 'contract/LOCK.json', bytes: lockBytes.length, sha256: digest(lockBytes), checkedSourceFiles: rows.length },
   output: { file: executableName, bytes: output.length, sha256: digest(output), externalBuiltins: external },
-  inputs, buildInputs, virtualInputs,
+  inputs, buildInputs, virtualInputs, persistenceInputs,
   embeddedRuntimeResources: [{ path: resourcePath, bytes: resourceBytes.length, sha256: digest(resourceBytes),
     consumer: 'tests/sdk2/serve-archive-host.helper.ts', transformation: 'same UTF-8 file content embedded in original JSON.parse expression' }],
 };
