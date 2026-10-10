@@ -3,15 +3,11 @@
 package memorypublication
 
 import (
-	"errors"
+	"github.com/tansrai/tansr-go/internal/atomicmedia"
 	"os"
 )
 
-// Network archive consumption remains available on other Go targets. FileStore
-// needs verified native locking and durable replacement, so it fails explicitly.
-func lockExclusive(*os.File) error {
-	return errors.New("memorypublication: FileStore is supported on Windows, Linux and macOS")
-}
-func replaceDurable(*os.Root, string, string) error {
-	return errors.New("memorypublication: durable file replacement is unavailable")
+func lockExclusive(file *os.File) error { return atomicmedia.LockExclusive(file) }
+func replaceDurable(root *os.Root, path, temp string) error {
+	return atomicmedia.ReplaceDurable(root, path, temp)
 }

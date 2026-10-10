@@ -372,6 +372,20 @@ func validateOperation(operation Operation) error {
 	case "tool.invoke":
 		// Reserved Shell/MemoryPublication profiles need their dedicated adapters. This package's
 		// business runner deliberately cannot turn those names into device execution authority.
+		if operation.Request.Args["name"] == TerminalPersistenceToolName {
+			if operation.ToolName != "MemoryPublication" || operation.Request.Args["definitionDigest"] != TerminalPersistenceDefinitionDigest {
+				return ErrInvalid
+			}
+			text, ok := operation.Request.Args["argsJson"].(string)
+			if !ok || len(text) > 32768 {
+				return ErrInvalid
+			}
+			args, err := canonical.Decode([]byte(text), canonical.Options{MaxBytes: 32768})
+			if err != nil {
+				return err
+			}
+			return wire.Validate("terminal-persistence-v1", "Request", args)
+		}
 		if operation.Request.Args["name"] == MemoryPublicationToolName {
 			if operation.ToolName != "MemoryPublication" || operation.Request.Args["definitionDigest"] != MemoryPublicationDefinitionDigest {
 				return ErrUnsupported

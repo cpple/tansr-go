@@ -22,11 +22,13 @@ import (
 	"github.com/tansrai/tansr-go/executor"
 	"github.com/tansrai/tansr-go/internal/wire"
 	"github.com/tansrai/tansr-go/memorypublication"
+	"github.com/tansrai/tansr-go/terminalpersistence"
 )
 
-type options struct{ base, session, executor, workspace, file, journal, mode, access, identity, bindingRequest, target string }
+type options struct{ base, session, executor, workspace, file, journal, mode, access, identity, bindingRequest, target, profile string }
 
 func flags(f *flag.FlagSet, o *options) {
+	f.StringVar(&o.profile, "profile", "memory-publication", "memory-publication or terminal-persistence-v1; new profile requires an independent media path and TANSR_JOURNAL_KEY")
 	f.StringVar(&o.base, "base", "http://127.0.0.1:8787", "Serve origin")
 	f.StringVar(&o.session, "session", "", "existing session selected by trusted controller (required)")
 	f.StringVar(&o.executor, "executor", "", "executor identity authorized by Serve (required)")
@@ -101,6 +103,16 @@ func scopeReader(ctx context.Context, path string) (func() (executor.Scope, erro
 
 func run(ctx context.Context, o options) error {
 	migrating := offlineRekeyMode(o.mode)
+	if o.profile == "" {
+		o.profile = "memory-publication"
+	}
+	persistence := o.profile == "terminal-persistence-v1"
+	if o.profile != "memory-publication" && !persistence {
+		return errors.New("unsupported explicit storage profile")
+	}
+	if persistence && migrating {
+		return errors.New("new profile does not use legacy rekey media")
+	}
 	if o.mode != "create" && o.mode != "reopen" && !migrating {
 		return errors.New("mode must be create, reopen, rekey-publication or rekey-journal")
 	}
@@ -197,20 +209,38 @@ func run(ctx context.Context, o options) error {
 			return e
 		}
 	}
-	store, e := memorypublication.OpenFileStore(memorypublication.Options{Path: path, Mode: o.mode, Key: key, Identity: identity, CurrentScope: current})
+	var host executor.MemoryPublicationHost
+	name, digest := executor.MemoryPublicationToolName, executor.MemoryPublicationDefinitionDigest
+	journalKey := key
+	if persistence {
+		journalKey, e = hex.DecodeString(os.Getenv("TANSR_JOURNAL_KEY"))
+		if e != nil || len(journalKey) != 32 || bytes.Equal(key, journalKey) {
+			return errors.New("new profile requires an independent 32-byte TANSR_JOURNAL_KEY")
+		}
+		defer clear(journalKey)
+		store, err := terminalpersistence.OpenFileStore(terminalpersistence.Options{Path: path, Mode: o.mode, Key: key, Identity: identity, CurrentScope: current})
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		host, e = terminalpersistence.NewHost(store, true)
+		name, digest = executor.TerminalPersistenceToolName, executor.TerminalPersistenceDefinitionDigest
+	} else {
+		store, err := memorypublication.OpenFileStore(memorypublication.Options{Path: path, Mode: o.mode, Key: key, Identity: identity, CurrentScope: current})
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		host, e = memorypublication.NewHost(store, true)
+	}
 	if e != nil {
 		return e
 	}
-	defer store.Close()
-	journal, e := executor.NewEncryptedFileJournal(journalPath, executor.JournalEncryption{Key: key, ApplicationScopeID: scope.ApplicationScopeID, EndUserID: scope.EndUserID, ExecutorID: o.executor, CheckAccess: check})
+	journal, e := executor.NewEncryptedFileJournal(journalPath, executor.JournalEncryption{Key: journalKey, ApplicationScopeID: scope.ApplicationScopeID, EndUserID: scope.EndUserID, ExecutorID: o.executor, CheckAccess: check})
 	if e != nil {
 		return e
 	}
 	defer journal.Close()
-	host, e := memorypublication.NewHost(store, true)
-	if e != nil {
-		return e
-	}
 	client, e := demoutil.Client(o.base)
 	if e != nil {
 		return e
@@ -220,9 +250,9 @@ func run(ctx context.Context, o options) error {
 		return e
 	}
 	workspace := executor.Workspace{WorkspaceID: o.workspace, Revision: "1"}
-	registration := executor.Registration{Protocol: executor.Protocol, ExecutorID: o.executor, Platform: executor.CurrentPlatform(), Workspaces: []executor.Workspace{workspace}, Operations: []string{"tool.invoke"}, Tools: []executor.ToolDefinition{{Name: executor.MemoryPublicationToolName, DefinitionDigest: executor.MemoryPublicationDefinitionDigest}}}
+	registration := executor.Registration{Protocol: executor.Protocol, ExecutorID: o.executor, Platform: executor.CurrentPlatform(), Workspaces: []executor.Workspace{workspace}, Operations: []string{"tool.invoke"}, Tools: []executor.ToolDefinition{{Name: name, DefinitionDigest: digest}}}
 	var expected *executor.Binding
-	runner, e := executor.NewRunner(executor.RunnerOptions{Client: execution, Registration: registration, Journal: journal, MemoryPublication: host, Authorize: func(c context.Context, op executor.Operation) error {
+	runnerOptions := executor.RunnerOptions{Client: execution, Registration: registration, Journal: journal, Authorize: func(c context.Context, op executor.Operation) error {
 		if e := c.Err(); e != nil {
 			return e
 		}
@@ -233,7 +263,13 @@ func run(ctx context.Context, o options) error {
 			return executor.ErrConflict
 		}
 		return nil
-	}})
+	}}
+	if persistence {
+		runnerOptions.TerminalPersistence = host
+	} else {
+		runnerOptions.MemoryPublication = host
+	}
+	runner, e := executor.NewRunner(runnerOptions)
 	if e != nil {
 		return e
 	}

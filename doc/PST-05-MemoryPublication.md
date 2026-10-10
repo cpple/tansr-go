@@ -184,3 +184,15 @@ Final sealed B6 consumption passed the original publication integration: one tes
 完整证据在 `J:/tansr/archive/PST-PLAN-20261009/dev-20261010-b8/languages/go/`：`orphan-receipt-red.jsonl`、`journal-green.jsonl`、`unit.log`、`unit-summary.json`、`gates.json`、`package-manifest.json`、`installed-module.log`、`serve-publication-b8-r2.jsonl`。原A25—30逐格索引在同级 `pst05-functional-assessment.json`，Archive页链/附件/pending ACK/coverage沿未改实现的既有真实回执独列，不以publication回执代签。只本地提交原PST分支，不合main、不push、不改冻结schema/lock；九端总断言由根唯一结算。Linux/macOS实机、物理掉电和正式发行未在本批执行。
 
 The B8 fix prevents a surviving permanent receipt from authorizing execution again when its claim is missing. Both plaintext and encrypted red cases are retained. Local gates, an offline module-cache consumer, and the shared sealed B8 Serve publication test passed. The ordinary local gate's ten environment-dependent Serve entries remain explicitly skipped; they are not added to the dedicated real-Serve result. No wire, owner policy, or receipt format changed.
+
+## 第九批：显式 TerminalPersistence v1
+
+新增 `terminalpersistence`（Go）/`tansr_sdk.terminal_persistence`（Python）独立布局，只在可信宿主显式选择 `terminal-persistence-v1` 时装配。旧六动作、原 39 项锁、terminal-services-v1 外层与原 owner/unknown 语义不变。新工具名为 `TansrTerminalPersistenceV1`，摘要 `33029a264edf81f3fda2a13fc382403d0cd7ffefa1f38088bb9366f387a13587`；schema/golden 是经批准的独立 sidecar。正文是任意字节，Root 身份只含 app/endUser/source/generation/domain 五字段。
+
+新 FileStore 用一次 AES-GCM 快照与原原子 replace/介质锁共同提交 Root、永久双键索引、transfer 原键结果和计数。只回收当前 Root、全部 staging base/已收对象均不再引用的正文块及描述页；永久索引 value、transfer 结果不回收，旧 Root 的 query 不承诺历史正文仍可 read。读和 lookup 必须固定当前 commitRoot，根变返回原冲突。原 owner 不符只可由可信 query-only 恢复回调准许原键观察，不授 put/commit。提交开始后取消、撤权或回执失回保持 unknown，需原路径/钥重开和原键 query；不自动重试 begin、换 ID 或清未决。
+
+实际默认/最高宿主配额为 active=8、staging=16MiB、receiptEntries=8192、transferFacts=4096、objects=16384、retainedBytes=32MiB；用户只能降低，head 返回真实值。独立密文快照帽为 128MiB，另留原临时文件空间，不宣称逻辑配额等于磁盘预留。每次写仍重写整个快照、冷开审计整个布局，未声称百万项/O(1)/性能达标。原有限钥次数/字节帽和未决必要写预留保留，帽耗尽拒新接纳并保原事实；新格式尚未提供 copy/轮钥或旧格式自动转换，不能套用旧六动作的迁移入口。无受支持备份、任意 delete、跨机接管、回滚检测或掉电保证。
+
+Demo 保留旧 profile 默认值，新增 `--profile terminal-persistence-v1` 显式路径；新介质与 encrypted execution journal 使用两把独立 32 字节钥。配置 source/domain 来自可信宿主，不能采信网络正文来授恢复权。新格式不接受旧 copy/rekey Demo 模式。终端只实现机械存储，消费/归档业务策略仍在 Serve。
+
+本批原门与安装消费回执归 `archive/PST-PLAN-20261009/dev-20261010-b9/python-go`；Go 的新/旧真实 HTTP 各 1/1 属已提交集成 `4d7a8d3`（`b9/go-integration/report.md`），Python 新 profile 实际 HTTP、Linux/macOS 运行、跨平台钥托管尚未验证。交付只本地提交，不推送、合并或发布；父卡与36断言仍由根统一结算。
